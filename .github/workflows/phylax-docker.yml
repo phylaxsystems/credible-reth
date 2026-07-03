@@ -25,7 +25,6 @@ jobs:
     name: Build and push phylax reth image
     runs-on: ubuntu-latest
     permissions:
-      packages: write
       contents: read
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
