@@ -762,13 +762,10 @@ where
         block_overrides: Option<Box<BlockOverrides>>,
     ) -> RpcResult<Bytes> {
         trace!(target: "rpc::eth", ?request, ?block_number, ?state_overrides, ?block_overrides, "Serving eth_call");
-        Ok(EthCall::call(
-            self,
-            request,
-            block_number,
-            EvmOverrides::new(state_overrides, block_overrides),
-        )
-        .await?)
+        let overrides = self
+            .credible_config()
+            .apply_marker_override(EvmOverrides::new(state_overrides, block_overrides));
+        Ok(EthCall::call(self, request, block_number, overrides).await?)
     }
 
     /// Handler for: `eth_fillTransaction`
@@ -811,13 +808,11 @@ where
         block_overrides: Option<Box<BlockOverrides>>,
     ) -> RpcResult<U256> {
         trace!(target: "rpc::eth", ?request, ?block_number, "Serving eth_estimateGas");
-        Ok(EthCall::estimate_gas_at(
-            self,
-            request,
-            block_number.unwrap_or_default(),
-            EvmOverrides::new(state_override, block_overrides),
-        )
-        .await?)
+        let overrides = self
+            .credible_config()
+            .apply_marker_override(EvmOverrides::new(state_override, block_overrides));
+        Ok(EthCall::estimate_gas_at(self, request, block_number.unwrap_or_default(), overrides)
+            .await?)
     }
 
     /// Handler for: `eth_gasPrice`

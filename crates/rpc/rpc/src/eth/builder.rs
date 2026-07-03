@@ -11,8 +11,9 @@ use reth_rpc_eth_api::{
 };
 use reth_rpc_eth_types::{
     builder::config::PendingBlockKind, fee_history::fee_history_cache_new_blocks_task,
-    receipt::EthReceiptConverter, EthStateCache, EthStateCacheConfig, FeeHistoryCache,
-    FeeHistoryCacheConfig, ForwardConfig, GasCap, GasPriceOracle, GasPriceOracleConfig,
+    receipt::EthReceiptConverter, CredibleRpcConfig, EthStateCache, EthStateCacheConfig,
+    FeeHistoryCache, FeeHistoryCacheConfig, ForwardConfig, GasCap, GasPriceOracle,
+    GasPriceOracleConfig,
 };
 use reth_rpc_server_types::constants::{
     DEFAULT_ETH_PROOF_WINDOW, DEFAULT_MAX_BLOCKING_IO_REQUEST, DEFAULT_MAX_SIMULATE_BLOCKS,
@@ -49,6 +50,7 @@ pub struct EthApiBuilder<N: RpcNodeCore, Rpc, NextEnv = ()> {
     send_raw_transaction_sync_timeout: Duration,
     evm_memory_limit: u64,
     force_blob_sidecar_upcasting: bool,
+    credible_config: CredibleRpcConfig,
 }
 
 impl<Provider, Pool, Network, EvmConfig, ChainSpec>
@@ -103,6 +105,7 @@ impl<N: RpcNodeCore, Rpc, NextEnv> EthApiBuilder<N, Rpc, NextEnv> {
             send_raw_transaction_sync_timeout,
             evm_memory_limit,
             force_blob_sidecar_upcasting,
+            credible_config,
         } = self;
         EthApiBuilder {
             components,
@@ -127,6 +130,7 @@ impl<N: RpcNodeCore, Rpc, NextEnv> EthApiBuilder<N, Rpc, NextEnv> {
             send_raw_transaction_sync_timeout,
             evm_memory_limit,
             force_blob_sidecar_upcasting,
+            credible_config,
         }
     }
 }
@@ -162,6 +166,7 @@ where
             send_raw_transaction_sync_timeout: Duration::from_secs(30),
             evm_memory_limit: (1 << 32) - 1,
             force_blob_sidecar_upcasting: false,
+            credible_config: CredibleRpcConfig::default(),
         }
     }
 }
@@ -204,6 +209,7 @@ where
             send_raw_transaction_sync_timeout,
             evm_memory_limit,
             force_blob_sidecar_upcasting,
+            credible_config,
         } = self;
         EthApiBuilder {
             components,
@@ -228,6 +234,7 @@ where
             send_raw_transaction_sync_timeout,
             evm_memory_limit,
             force_blob_sidecar_upcasting,
+            credible_config,
         }
     }
 
@@ -259,6 +266,7 @@ where
             send_raw_transaction_sync_timeout,
             evm_memory_limit,
             force_blob_sidecar_upcasting,
+            credible_config,
         } = self;
         EthApiBuilder {
             components,
@@ -283,6 +291,7 @@ where
             send_raw_transaction_sync_timeout,
             evm_memory_limit,
             force_blob_sidecar_upcasting,
+            credible_config,
         }
     }
 
@@ -531,6 +540,7 @@ where
             send_raw_transaction_sync_timeout,
             evm_memory_limit,
             force_blob_sidecar_upcasting,
+            credible_config,
         } = self;
 
         let provider = components.provider().clone();
@@ -584,6 +594,7 @@ where
             send_raw_transaction_sync_timeout,
             evm_memory_limit,
             force_blob_sidecar_upcasting,
+            credible_config,
         )
     }
 
@@ -618,6 +629,12 @@ where
     /// Sets whether to force upcasting EIP-4844 blob sidecars to EIP-7594 format.
     pub const fn force_blob_sidecar_upcasting(mut self, force: bool) -> Self {
         self.force_blob_sidecar_upcasting = force;
+        self
+    }
+
+    /// Sets the Credible Layer RPC configuration.
+    pub const fn credible_config(mut self, credible_config: CredibleRpcConfig) -> Self {
+        self.credible_config = credible_config;
         self
     }
 }

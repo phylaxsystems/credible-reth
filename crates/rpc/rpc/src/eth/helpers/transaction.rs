@@ -11,7 +11,7 @@ use reth_primitives_traits::{AlloyBlockHeader, WithEncoded};
 use reth_rpc_convert::RpcConvert;
 use reth_rpc_eth_api::{
     helpers::{spec::SignersForRpc, EthTransactions, LoadTransaction},
-    FromEvmError, RpcNodeCore,
+    EthApiTypes, FromEvmError, RpcNodeCore,
 };
 use reth_rpc_eth_types::{error::RpcPoolError, EthApiError};
 use reth_storage_api::BlockReaderIdExt;
@@ -105,7 +105,8 @@ where
                 }).map_err(EthApiError::other)?;
 
             // Retain tx in local tx pool after forwarding, for local RPC usage.
-            let _ = self.inner.add_pool_transaction(origin, pool_transaction).await;
+            let retained_origin = self.credible_config().resolve_forwarded_origin(origin);
+            let _ = self.inner.add_pool_transaction(retained_origin, pool_transaction).await;
 
             return Ok(hash);
         }

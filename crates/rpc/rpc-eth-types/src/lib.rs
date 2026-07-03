@@ -15,6 +15,7 @@ pub mod block;
 pub mod builder;
 pub mod cache;
 pub mod capabilities;
+pub mod credible;
 pub mod error;
 pub mod fee_history;
 pub mod gas_oracle;
@@ -35,6 +36,7 @@ pub use cache::{
     EthStateCache,
 };
 pub use capabilities::{EthCapabilities, EthCapabilitiesHead, EthCapabilitiesResource};
+pub use credible::{CredibleMarkerOverride, CredibleRpcConfig};
 pub use error::{EthApiError, EthResult, RevertError, RpcInvalidTransactionError, SignError};
 pub use fee_history::{FeeHistoryCache, FeeHistoryCacheConfig, FeeHistoryEntry};
 pub use gas_oracle::{

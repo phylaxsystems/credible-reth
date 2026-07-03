@@ -3,8 +3,8 @@
 use std::time::Duration;
 
 use crate::{
-    EthStateCacheConfig, FeeHistoryCacheConfig, ForwardConfig, GasPriceOracleConfig,
-    RPC_DEFAULT_GAS_CAP,
+    CredibleRpcConfig, EthStateCacheConfig, FeeHistoryCacheConfig, ForwardConfig,
+    GasPriceOracleConfig, RPC_DEFAULT_GAS_CAP,
 };
 use reqwest::Url;
 use reth_rpc_server_types::constants::{
@@ -114,6 +114,8 @@ pub struct EthConfig {
     /// This is disabled by default, allowing blob transactions with EIP-4844 sidecars to be
     /// submitted without automatic conversion.
     pub force_blob_sidecar_upcasting: bool,
+    /// Credible Layer RPC configuration.
+    pub credible_config: CredibleRpcConfig,
 }
 
 impl EthConfig {
@@ -149,6 +151,7 @@ impl Default for EthConfig {
             send_raw_transaction_sync_timeout: RPC_DEFAULT_SEND_RAW_TX_SYNC_TIMEOUT_SECS,
             rpc_evm_memory_limit: (1 << 32) - 1,
             force_blob_sidecar_upcasting: false,
+            credible_config: CredibleRpcConfig::default(),
         }
     }
 }
@@ -261,6 +264,12 @@ impl EthConfig {
     /// Configures whether to force upcasting EIP-4844 blob sidecars to EIP-7594 format.
     pub const fn force_blob_sidecar_upcasting(mut self, force: bool) -> Self {
         self.force_blob_sidecar_upcasting = force;
+        self
+    }
+
+    /// Configures the Credible Layer RPC behavior.
+    pub const fn credible_config(mut self, credible_config: CredibleRpcConfig) -> Self {
+        self.credible_config = credible_config;
         self
     }
 }
