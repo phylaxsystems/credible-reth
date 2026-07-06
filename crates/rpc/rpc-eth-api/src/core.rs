@@ -764,13 +764,10 @@ where
     ) -> RpcResult<Bytes> {
         trace!(target: "rpc::eth", ?request, ?block_number, ?state_overrides, ?block_overrides, "Serving eth_call");
         let at = block_number.unwrap_or_default();
-        let resolved_block_number = self
-            .provider()
-            .block_number_for_id(at)
-            .map_err(T::Error::from_eth_err)?
-            .unwrap_or_default();
+        let credible_block_number =
+            resolve_credible_block_number(self, at, block_overrides.as_deref())?;
         let overrides = self.credible_config().apply_credible_block_override(
-            resolved_block_number,
+            credible_block_number,
             EvmOverrides::new(state_overrides, block_overrides),
         );
         Ok(EthCall::call(self, request, block_number, overrides).await?)
@@ -817,13 +814,10 @@ where
     ) -> RpcResult<U256> {
         trace!(target: "rpc::eth", ?request, ?block_number, "Serving eth_estimateGas");
         let at = block_number.unwrap_or_default();
-        let resolved_block_number = self
-            .provider()
-            .block_number_for_id(at)
-            .map_err(T::Error::from_eth_err)?
-            .unwrap_or_default();
+        let credible_block_number =
+            resolve_credible_block_number(self, at, block_overrides.as_deref())?;
         let overrides = self.credible_config().apply_credible_block_override(
-            resolved_block_number,
+            credible_block_number,
             EvmOverrides::new(state_override, block_overrides),
         );
         Ok(EthCall::estimate_gas_at(self, request, at, overrides).await?)
@@ -1014,5 +1008,49 @@ where
         trace!(target: "rpc::eth", ?block, "Serving eth_getBlockAccessListRaw");
 
         Ok(self.get_raw_block_access_list(block).await?)
+    }
+}
+
+/// Resolves the block number the EVM will actually see, for deriving the credible block
+/// override. Prefers `block_overrides.number` when set; otherwise resolves `at`, erroring
+/// instead of silently defaulting to block `0` if it can't be resolved.
+fn resolve_credible_block_number<T: FullEthApi>(
+    eth_api: &T,
+    at: BlockId,
+    block_overrides: Option<&BlockOverrides>,
+) -> Result<u64, T::Error> {
+    if let Some(number) = credible_block_number_override(block_overrides) {
+        return Ok(number);
+    }
+
+    eth_api
+        .provider()
+        .block_number_for_id(at)
+        .map_err(T::Error::from_eth_err)?
+        .ok_or_else(|| T::Error::from_eth_err(EthApiError::HeaderNotFound(at)))
+}
+
+/// Extracts the block number the EVM will use from `block_overrides.number`, if the caller set
+/// one. This must take priority over resolving `at`, since `prepare_call_env` applies it after.
+fn credible_block_number_override(block_overrides: Option<&BlockOverrides>) -> Option<u64> {
+    block_overrides.and_then(|overrides| overrides.number).map(|number| number.saturating_to())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn block_overrides_number_takes_priority() {
+        let overrides = BlockOverrides { number: Some(U256::from(42)), ..Default::default() };
+        assert_eq!(credible_block_number_override(Some(&overrides)), Some(42));
+    }
+
+    #[test]
+    fn no_override_number_without_block_overrides() {
+        assert_eq!(credible_block_number_override(None), None);
+
+        let overrides = BlockOverrides::default();
+        assert_eq!(credible_block_number_override(Some(&overrides)), None);
     }
 }
