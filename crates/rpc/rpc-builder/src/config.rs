@@ -112,7 +112,7 @@ impl RethRpcServerConfig for RpcServerArgs {
             .raw_tx_forwarder(self.rpc_forwarder.clone())
             .rpc_evm_memory_limit(self.rpc_evm_memory_limit)
             .force_blob_sidecar_upcasting(self.rpc_force_blob_sidecar_upcasting)
-            .credible_config(self.credible.credible_config())
+            .credible_config(self.credible.into())
     }
 
     fn flashbots_config(&self) -> ValidationApiConfig {

@@ -36,7 +36,7 @@ pub use cache::{
     EthStateCache,
 };
 pub use capabilities::{EthCapabilities, EthCapabilitiesHead, EthCapabilitiesResource};
-pub use credible::{CredibleMarkerOverride, CredibleRpcConfig};
+pub use credible::CredibleRpcConfig;
 pub use error::{EthApiError, EthResult, RevertError, RpcInvalidTransactionError, SignError};
 pub use fee_history::{FeeHistoryCache, FeeHistoryCacheConfig, FeeHistoryEntry};
 pub use gas_oracle::{

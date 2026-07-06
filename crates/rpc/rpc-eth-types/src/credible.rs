@@ -1,28 +1,46 @@
 //! Credible Layer RPC integration hooks.
 
-use alloy_primitives::{Address, B256};
+use alloy_primitives::{keccak256, Address, B256, U256};
 use alloy_rpc_types_eth::state::EvmOverrides;
+use alloy_sol_types::SolValue;
 use reth_transaction_pool::TransactionOrigin;
 use serde::{Deserialize, Serialize};
+
+/// Base storage slot of `CredibleRegistry`'s `_credibleBlocks` mapping, per its current
+/// storage layout (`forge inspect CredibleRegistry storage-layout`).
+const DEFAULT_CREDIBLE_BLOCKS_BASE_SLOT: u64 = 1;
 
 /// Credible Layer behavior toggles for the `eth` RPC namespace.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CredibleRpcConfig {
-    /// Storage value that should be visible to marker-aware `eth_call` / `eth_estimateGas`.
+    /// Address of the on-chain `CredibleRegistry` contract.
     ///
-    /// Marker-aware simulation is enabled.
-    pub marker_override: Option<CredibleMarkerOverride>,
+    /// When set, the credible block override is derived per-request from
+    /// `_credibleBlocks[blockNumber]`.
+    pub registry_address: Option<Address>,
     /// Retains transactions accepted by a raw transaction forwarder as private pool transactions.
     pub retain_forwarded_txs_as_private: bool,
 }
 
 impl CredibleRpcConfig {
-    /// Applies configured marker state to call-like EVM overrides.
-    pub fn apply_marker_override(&self, overrides: EvmOverrides) -> EvmOverrides {
-        match self.marker_override {
-            Some(marker_override) => marker_override.apply_to(overrides),
-            None => overrides,
-        }
+    /// Applies the credible block override for a call simulated against `block_number` to
+    /// call-like EVM overrides.
+    ///
+    /// A no-op if no registry is configured. Registry-backed resolution is a pure hash
+    /// computation — no call into the registry contract, no EVM execution, no async lookup.
+    pub fn apply_credible_block_override(
+        &self,
+        block_number: u64,
+        overrides: EvmOverrides,
+    ) -> EvmOverrides {
+        let Some(registry) = self.registry_address else { return overrides };
+
+        let block_override = CredibleBlockOverride {
+            address: registry,
+            slot: credible_block_slot(block_number, U256::from(DEFAULT_CREDIBLE_BLOCKS_BASE_SLOT)),
+            value: B256::with_last_byte(1),
+        };
+        block_override.apply_to(overrides)
     }
 
     /// Returns the origin a successfully forwarded transaction should be retained under.
@@ -38,20 +56,27 @@ impl CredibleRpcConfig {
     }
 }
 
-/// A single storage-slot marker override used for call-like RPC simulation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub struct CredibleMarkerOverride {
-    /// Contract/account that owns the marker storage.
-    pub address: Address,
-    /// Marker storage slot.
-    pub slot: B256,
-    /// Marker value to expose during simulation.
-    pub value: B256,
+/// Computes the storage slot of `_credibleBlocks[block_number]`, matching Solidity's mapping
+/// slot derivation: `keccak256(abi.encode(block_number, base_slot))`.
+fn credible_block_slot(block_number: u64, base_slot: U256) -> B256 {
+    keccak256((U256::from(block_number), base_slot).abi_encode())
 }
 
-impl CredibleMarkerOverride {
-    /// Merges this marker storage value into existing EVM overrides.
-    pub fn apply_to(self, mut overrides: EvmOverrides) -> EvmOverrides {
+/// The storage override that makes `_credibleBlocks[blockNumber]` read as `true` for one
+/// call-like RPC simulation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+struct CredibleBlockOverride {
+    /// `CredibleRegistry` contract address.
+    address: Address,
+    /// `_credibleBlocks[blockNumber]` storage slot.
+    slot: B256,
+    /// Value to expose during simulation.
+    value: B256,
+}
+
+impl CredibleBlockOverride {
+    /// Merges this override into existing EVM overrides.
+    fn apply_to(self, mut overrides: EvmOverrides) -> EvmOverrides {
         let state = overrides.state.get_or_insert_with(Default::default);
         let account = state.entry(self.address).or_default();
 
@@ -71,15 +96,15 @@ mod tests {
     use alloy_rpc_types_eth::state::{AccountOverride, StateOverride};
 
     #[test]
-    fn marker_override_adds_state_diff() {
+    fn credible_block_override_adds_state_diff() {
         let address = Address::repeat_byte(0x11);
         let slot = B256::repeat_byte(0x22);
         let value = B256::repeat_byte(0x33);
-        let marker = CredibleMarkerOverride { address, slot, value };
+        let block_override = CredibleBlockOverride { address, slot, value };
 
-        let overrides = marker.apply_to(EvmOverrides::default());
-        let state = overrides.state.expect("marker override should add state overrides");
-        let account = state.get(&address).expect("marker account should be present");
+        let overrides = block_override.apply_to(EvmOverrides::default());
+        let state = overrides.state.expect("override should add state overrides");
+        let account = state.get(&address).expect("override account should be present");
 
         assert_eq!(account.state, None);
         assert_eq!(
@@ -89,10 +114,10 @@ mod tests {
     }
 
     #[test]
-    fn marker_override_merges_with_existing_full_state() {
+    fn credible_block_override_merges_with_existing_full_state() {
         let address = Address::repeat_byte(0x11);
-        let marker_slot = B256::repeat_byte(0x22);
-        let marker_value = B256::repeat_byte(0x33);
+        let override_slot = B256::repeat_byte(0x22);
+        let override_value = B256::repeat_byte(0x33);
         let existing_slot = B256::repeat_byte(0x44);
         let existing_value = B256::repeat_byte(0x55);
 
@@ -102,14 +127,47 @@ mod tests {
             AccountOverride::default().with_state([(existing_slot, existing_value)]),
         );
 
-        let marker = CredibleMarkerOverride { address, slot: marker_slot, value: marker_value };
-        let overrides = marker.apply_to(EvmOverrides::state(Some(state_override)));
-        let state = overrides.state.expect("marker override should keep state overrides");
-        let account = state.get(&address).expect("marker account should be present");
+        let block_override =
+            CredibleBlockOverride { address, slot: override_slot, value: override_value };
+        let overrides = block_override.apply_to(EvmOverrides::state(Some(state_override)));
+        let state = overrides.state.expect("override should keep state overrides");
+        let account = state.get(&address).expect("override account should be present");
         let state = account.state.as_ref().expect("full state override should be preserved");
 
         assert_eq!(account.state_diff, None);
         assert_eq!(state.get(&existing_slot), Some(&existing_value));
-        assert_eq!(state.get(&marker_slot), Some(&marker_value));
+        assert_eq!(state.get(&override_slot), Some(&override_value));
+    }
+
+    #[test]
+    fn registry_slot_matches_solidity_mapping_derivation() {
+        // keccak256(abi.encode(uint256(12345), uint256(1))), cross-checked with
+        // `cast index uint256 12345 1`.
+        let expected: B256 =
+            "0x24689f9b6ba9bad3c49d2b1293bf33fa38d0c418c093b2b4bc23f5d18e11355e".parse().unwrap();
+        assert_eq!(credible_block_slot(12345, U256::from(1)), expected);
+    }
+
+    #[test]
+    fn no_override_without_registry() {
+        let config = CredibleRpcConfig::default();
+        let overrides = config.apply_credible_block_override(100, EvmOverrides::default());
+        assert_eq!(overrides.state, None);
+    }
+
+    #[test]
+    fn applies_registry_derived_override() {
+        let registry = Address::repeat_byte(0xaa);
+        let config = CredibleRpcConfig { registry_address: Some(registry), ..Default::default() };
+
+        let overrides = config.apply_credible_block_override(12345, EvmOverrides::default());
+        let state = overrides.state.expect("registry override should add state overrides");
+        let account = state.get(&registry).expect("registry account should be present");
+        let expected_slot: B256 =
+            "0x24689f9b6ba9bad3c49d2b1293bf33fa38d0c418c093b2b4bc23f5d18e11355e".parse().unwrap();
+        assert_eq!(
+            account.state_diff.as_ref().and_then(|diff| diff.get(&expected_slot)),
+            Some(&B256::with_last_byte(1))
+        );
     }
 }

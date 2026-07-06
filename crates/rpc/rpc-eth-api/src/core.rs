@@ -2,7 +2,7 @@
 //! the `eth_` namespace.
 use crate::{
     helpers::{EthApiSpec, EthBlocks, EthCall, EthFees, EthState, EthTransactions, FullEthApi},
-    RpcBlock, RpcHeader, RpcReceipt, RpcTransaction,
+    FromEthApiError, RpcBlock, RpcHeader, RpcReceipt, RpcTransaction,
 };
 use alloy_dyn_abi::TypedData;
 use alloy_eips::{eip2930::AccessListResult, BlockId, BlockNumberOrTag};
@@ -20,6 +20,7 @@ use reth_primitives_traits::TxTy;
 use reth_rpc_convert::RpcTxReq;
 use reth_rpc_eth_types::{EthApiError, EthCapabilities, FillTransaction};
 use reth_rpc_server_types::{result::internal_rpc_err, ToRpcResult};
+use reth_storage_api::BlockIdReader;
 use serde_json::Value;
 use std::collections::HashMap;
 use tracing::trace;
@@ -762,9 +763,16 @@ where
         block_overrides: Option<Box<BlockOverrides>>,
     ) -> RpcResult<Bytes> {
         trace!(target: "rpc::eth", ?request, ?block_number, ?state_overrides, ?block_overrides, "Serving eth_call");
-        let overrides = self
-            .credible_config()
-            .apply_marker_override(EvmOverrides::new(state_overrides, block_overrides));
+        let at = block_number.unwrap_or_default();
+        let resolved_block_number = self
+            .provider()
+            .block_number_for_id(at)
+            .map_err(T::Error::from_eth_err)?
+            .unwrap_or_default();
+        let overrides = self.credible_config().apply_credible_block_override(
+            resolved_block_number,
+            EvmOverrides::new(state_overrides, block_overrides),
+        );
         Ok(EthCall::call(self, request, block_number, overrides).await?)
     }
 
@@ -808,11 +816,17 @@ where
         block_overrides: Option<Box<BlockOverrides>>,
     ) -> RpcResult<U256> {
         trace!(target: "rpc::eth", ?request, ?block_number, "Serving eth_estimateGas");
-        let overrides = self
-            .credible_config()
-            .apply_marker_override(EvmOverrides::new(state_override, block_overrides));
-        Ok(EthCall::estimate_gas_at(self, request, block_number.unwrap_or_default(), overrides)
-            .await?)
+        let at = block_number.unwrap_or_default();
+        let resolved_block_number = self
+            .provider()
+            .block_number_for_id(at)
+            .map_err(T::Error::from_eth_err)?
+            .unwrap_or_default();
+        let overrides = self.credible_config().apply_credible_block_override(
+            resolved_block_number,
+            EvmOverrides::new(state_override, block_overrides),
+        );
+        Ok(EthCall::estimate_gas_at(self, request, at, overrides).await?)
     }
 
     /// Handler for: `eth_gasPrice`
