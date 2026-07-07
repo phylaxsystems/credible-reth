@@ -764,12 +764,17 @@ where
     ) -> RpcResult<Bytes> {
         trace!(target: "rpc::eth", ?request, ?block_number, ?state_overrides, ?block_overrides, "Serving eth_call");
         let at = block_number.unwrap_or_default();
-        let credible_block_number =
-            resolve_credible_block_number(self, at, block_overrides.as_deref())?;
-        let overrides = self.credible_config().apply_credible_block_override(
-            credible_block_number,
-            EvmOverrides::new(state_overrides, block_overrides),
-        );
+        let credible_config = self.credible_config();
+        let overrides = if credible_config.registry_address.is_some() {
+            let credible_block_number =
+                resolve_credible_block_number(self, at, block_overrides.as_deref())?;
+            credible_config.apply_credible_block_override(
+                credible_block_number,
+                EvmOverrides::new(state_overrides, block_overrides),
+            )
+        } else {
+            EvmOverrides::new(state_overrides, block_overrides)
+        };
         Ok(EthCall::call(self, request, block_number, overrides).await?)
     }
 
@@ -814,12 +819,17 @@ where
     ) -> RpcResult<U256> {
         trace!(target: "rpc::eth", ?request, ?block_number, "Serving eth_estimateGas");
         let at = block_number.unwrap_or_default();
-        let credible_block_number =
-            resolve_credible_block_number(self, at, block_overrides.as_deref())?;
-        let overrides = self.credible_config().apply_credible_block_override(
-            credible_block_number,
-            EvmOverrides::new(state_override, block_overrides),
-        );
+        let credible_config = self.credible_config();
+        let overrides = if credible_config.registry_address.is_some() {
+            let credible_block_number =
+                resolve_credible_block_number(self, at, block_overrides.as_deref())?;
+            credible_config.apply_credible_block_override(
+                credible_block_number,
+                EvmOverrides::new(state_override, block_overrides),
+            )
+        } else {
+            EvmOverrides::new(state_override, block_overrides)
+        };
         Ok(EthCall::estimate_gas_at(self, request, at, overrides).await?)
     }
 
