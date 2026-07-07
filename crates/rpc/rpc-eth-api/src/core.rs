@@ -764,17 +764,8 @@ where
     ) -> RpcResult<Bytes> {
         trace!(target: "rpc::eth", ?request, ?block_number, ?state_overrides, ?block_overrides, "Serving eth_call");
         let at = block_number.unwrap_or_default();
-        let credible_config = self.credible_config();
-        let overrides = if credible_config.registry_address.is_some() {
-            let credible_block_number =
-                resolve_credible_block_number(self, at, block_overrides.as_deref())?;
-            credible_config.apply_credible_block_override(
-                credible_block_number,
-                EvmOverrides::new(state_overrides, block_overrides),
-            )
-        } else {
-            EvmOverrides::new(state_overrides, block_overrides)
-        };
+        let overrides =
+            credible_call_overrides(self, at, EvmOverrides::new(state_overrides, block_overrides))?;
         Ok(EthCall::call(self, request, block_number, overrides).await?)
     }
 
@@ -819,17 +810,8 @@ where
     ) -> RpcResult<U256> {
         trace!(target: "rpc::eth", ?request, ?block_number, "Serving eth_estimateGas");
         let at = block_number.unwrap_or_default();
-        let credible_config = self.credible_config();
-        let overrides = if credible_config.registry_address.is_some() {
-            let credible_block_number =
-                resolve_credible_block_number(self, at, block_overrides.as_deref())?;
-            credible_config.apply_credible_block_override(
-                credible_block_number,
-                EvmOverrides::new(state_override, block_overrides),
-            )
-        } else {
-            EvmOverrides::new(state_override, block_overrides)
-        };
+        let overrides =
+            credible_call_overrides(self, at, EvmOverrides::new(state_override, block_overrides))?;
         Ok(EthCall::estimate_gas_at(self, request, at, overrides).await?)
     }
 
@@ -1019,6 +1001,24 @@ where
 
         Ok(self.get_raw_block_access_list(block).await?)
     }
+}
+
+/// Applies the credible block override to `overrides` for a call simulated against `at`.
+///
+/// A no-op if no credible registry is configured, skipping block number resolution entirely.
+fn credible_call_overrides<T: FullEthApi>(
+    eth_api: &T,
+    at: BlockId,
+    overrides: EvmOverrides,
+) -> Result<EvmOverrides, T::Error> {
+    let credible_config = eth_api.credible_config();
+    if credible_config.registry_address.is_none() {
+        return Ok(overrides);
+    }
+
+    let credible_block_number =
+        resolve_credible_block_number(eth_api, at, overrides.block.as_deref())?;
+    Ok(credible_config.apply_credible_block_override(credible_block_number, overrides))
 }
 
 /// Resolves the block number the EVM will actually see, for deriving the credible block
