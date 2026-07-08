@@ -18,7 +18,9 @@ use alloy_serde::JsonStorageKey;
 use jsonrpsee::{core::RpcResult, proc_macros::rpc};
 use reth_primitives_traits::TxTy;
 use reth_rpc_convert::RpcTxReq;
-use reth_rpc_eth_types::{EthApiError, EthCapabilities, FillTransaction};
+use reth_rpc_eth_types::{
+    credible::credible_block_number_override, EthApiError, EthCapabilities, FillTransaction,
+};
 use reth_rpc_server_types::{result::internal_rpc_err, ToRpcResult};
 use reth_storage_api::BlockIdReader;
 use serde_json::Value;
@@ -1038,29 +1040,4 @@ fn resolve_credible_block_number<T: FullEthApi>(
         .block_number_for_id(at)
         .map_err(T::Error::from_eth_err)?
         .ok_or_else(|| T::Error::from_eth_err(EthApiError::HeaderNotFound(at)))
-}
-
-/// Extracts the block number the EVM will use from `block_overrides.number`, if the caller set
-/// one. This must take priority over resolving `at`, since `prepare_call_env` applies it after.
-fn credible_block_number_override(block_overrides: Option<&BlockOverrides>) -> Option<u64> {
-    block_overrides.and_then(|overrides| overrides.number).map(|number| number.saturating_to())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn block_overrides_number_takes_priority() {
-        let overrides = BlockOverrides { number: Some(U256::from(42)), ..Default::default() };
-        assert_eq!(credible_block_number_override(Some(&overrides)), Some(42));
-    }
-
-    #[test]
-    fn no_override_number_without_block_overrides() {
-        assert_eq!(credible_block_number_override(None), None);
-
-        let overrides = BlockOverrides::default();
-        assert_eq!(credible_block_number_override(Some(&overrides)), None);
-    }
 }

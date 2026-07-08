@@ -1,7 +1,7 @@
 //! Credible Layer RPC integration hooks.
 
 use alloy_primitives::{keccak256, Address, B256, U256};
-use alloy_rpc_types_eth::state::EvmOverrides;
+use alloy_rpc_types_eth::{state::EvmOverrides, BlockOverrides};
 use alloy_sol_types::SolValue;
 use reth_transaction_pool::TransactionOrigin;
 use serde::{Deserialize, Serialize};
@@ -60,6 +60,13 @@ impl CredibleRpcConfig {
 /// slot derivation: `keccak256(abi.encode(block_number, base_slot))`.
 fn credible_block_slot(block_number: u64, base_slot: U256) -> B256 {
     keccak256((U256::from(block_number), base_slot).abi_encode())
+}
+
+/// Extracts the block number the EVM will use from `block_overrides.number`, if the caller set
+/// one. This must take priority over resolving the request's block tag, since the override is
+/// applied after tag resolution.
+pub fn credible_block_number_override(block_overrides: Option<&BlockOverrides>) -> Option<u64> {
+    block_overrides.and_then(|overrides| overrides.number).map(|number| number.saturating_to())
 }
 
 /// The storage override that makes `_credibleBlocks[blockNumber]` read as `true` for one
@@ -169,5 +176,19 @@ mod tests {
             account.state_diff.as_ref().and_then(|diff| diff.get(&expected_slot)),
             Some(&B256::with_last_byte(1))
         );
+    }
+
+    #[test]
+    fn block_overrides_number_takes_priority() {
+        let overrides = BlockOverrides { number: Some(U256::from(42)), ..Default::default() };
+        assert_eq!(credible_block_number_override(Some(&overrides)), Some(42));
+    }
+
+    #[test]
+    fn no_override_number_without_block_overrides() {
+        assert_eq!(credible_block_number_override(None), None);
+
+        let overrides = BlockOverrides::default();
+        assert_eq!(credible_block_number_override(Some(&overrides)), None);
     }
 }

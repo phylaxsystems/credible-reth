@@ -34,6 +34,7 @@ use reth_revm::{
 use reth_rpc_convert::{RpcConvert, RpcTxReq};
 use reth_rpc_eth_types::{
     cache::db::StateProviderTraitObjWrapper,
+    credible::credible_block_number_override,
     error::{AsEthApiError, FromEthApiError},
     simulate::{self, EthSimulateError},
     EthApiError, StateCacheDb,
@@ -129,6 +130,17 @@ pub trait EthCall: EstimateCall + Call + LoadPendingBlock + LoadBlock + FullEthA
 
                 for block in block_state_calls {
                     let SimBlock { block_overrides, state_overrides, calls } = block;
+
+                    // sanitize_chain guarantees block_overrides.number is set for every entry.
+                    let target_number = credible_block_number_override(block_overrides.as_ref())
+                        .unwrap_or_default();
+                    let state_overrides = this
+                        .credible_config()
+                        .apply_credible_block_override(
+                            target_number,
+                            EvmOverrides::state(state_overrides),
+                        )
+                        .state;
 
                     let attributes = this
                         .pending_env_builder()
