@@ -1026,6 +1026,10 @@ fn credible_call_overrides<T: FullEthApi>(
 /// Resolves the block number the EVM will actually see, for deriving the credible block
 /// override. Prefers `block_overrides.number` when set; otherwise resolves `at`, erroring
 /// instead of silently defaulting to block `0` if it can't be resolved.
+///
+/// The provider only resolves committed blocks, so `at.is_pending()` can't be looked up
+/// directly; a pending call/estimate executes as if mined on top of the current chain tip,
+/// so that case resolves the latest block instead and adds one.
 fn resolve_credible_block_number<T: FullEthApi>(
     eth_api: &T,
     at: BlockId,
@@ -1035,9 +1039,12 @@ fn resolve_credible_block_number<T: FullEthApi>(
         return Ok(number);
     }
 
-    eth_api
+    let is_pending = at.is_pending();
+    let number = eth_api
         .provider()
-        .block_number_for_id(at)
+        .block_number_for_id(if is_pending { BlockId::latest() } else { at })
         .map_err(T::Error::from_eth_err)?
-        .ok_or_else(|| T::Error::from_eth_err(EthApiError::HeaderNotFound(at)))
+        .ok_or_else(|| T::Error::from_eth_err(EthApiError::HeaderNotFound(at)))?;
+
+    Ok(if is_pending { number.saturating_add(1) } else { number })
 }
