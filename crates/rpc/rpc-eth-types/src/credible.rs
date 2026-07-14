@@ -54,6 +54,13 @@ impl CredibleRpcConfig {
             origin
         }
     }
+
+    /// Whether retained-private transactions must be hidden from public pool-reading RPCs.
+    ///
+    /// Enabled exactly when the node retains forwarded transactions as private.
+    pub const fn hide_private_pool_txs(&self) -> bool {
+        self.retain_forwarded_txs_as_private
+    }
 }
 
 /// Computes the storage slot of `_credibleBlocks[block_number]`, matching Solidity's mapping
@@ -190,5 +197,13 @@ mod tests {
 
         let overrides = BlockOverrides::default();
         assert_eq!(credible_block_number_override(Some(&overrides)), None);
+    }
+
+    #[test]
+    fn hide_private_pool_txs_tracks_retain_flag() {
+        assert!(!CredibleRpcConfig::default().hide_private_pool_txs());
+        let config =
+            CredibleRpcConfig { retain_forwarded_txs_as_private: true, ..Default::default() };
+        assert!(config.hide_private_pool_txs());
     }
 }
