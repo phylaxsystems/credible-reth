@@ -1,7 +1,7 @@
 //! Trait for specifying `eth` network dependent API types.
 
-use crate::{AsEthApiError, FromEthApiError, RpcNodeCore};
-use alloy_rpc_types_eth::Block;
+use crate::{AsEthApiError, FromEthApiError, RpcNodeCore, StateOverrideContext, StateOverrideHookRef};
+use alloy_rpc_types_eth::{state::StateOverride, Block};
 use reth_rpc_convert::{RpcConvert, SignableTxRequest};
 pub use reth_rpc_convert::{RpcTransaction, RpcTxReq, RpcTypes};
 use reth_rpc_eth_types::CredibleRpcConfig;
@@ -32,6 +32,23 @@ pub trait EthApiTypes: Send + Sync + Clone {
 
     /// Returns reference to transaction response builder.
     fn converter(&self) -> &Self::RpcConvert;
+
+    /// Returns an optional hook for adding state overrides after the EVM block environment has
+    /// been resolved.
+    fn state_override_hook(&self) -> Option<StateOverrideHookRef> {
+        None
+    }
+
+    /// Applies the configured state override hook, if any.
+    fn apply_state_override_hook(
+        &self,
+        context: StateOverrideContext,
+        overrides: &mut Option<StateOverride>,
+    ) {
+        if let Some(hook) = self.state_override_hook() {
+            hook.apply(context, overrides.get_or_insert_with(Default::default));
+        }
+    }
 
     /// Returns the Credible Layer RPC configuration active for this API instance.
     ///

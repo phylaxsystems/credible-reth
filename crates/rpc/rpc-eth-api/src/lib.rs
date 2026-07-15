@@ -19,6 +19,7 @@ pub mod filter;
 pub mod helpers;
 pub mod node;
 pub mod pubsub;
+pub mod state_override;
 pub mod types;
 
 pub use bundle::{EthBundleApiServer, EthCallBundleApiServer};
@@ -28,6 +29,8 @@ pub use filter::{EngineEthFilter, EthFilterApiServer, QueryLimits};
 pub use helpers::config::EthConfigApiServer;
 pub use node::{RpcNodeCore, RpcNodeCoreExt};
 pub use pubsub::EthPubSubApiServer;
+pub use state_override::{StateOverrideContext, StateOverrideHook, StateOverrideHookRef,
+    StateOverrideMethod};
 pub use reth_rpc_convert::*;
 pub use reth_rpc_eth_types::error::{
     AsEthApiError, FromEthApiError, FromEvmError, IntoEthApiError,

@@ -18,7 +18,7 @@ use reth_rpc_convert::{RpcConvert, RpcConverter};
 use reth_rpc_eth_api::{
     helpers::{pending_block::PendingEnvBuilder, spec::SignersForRpc, SpawnBlocking},
     node::{RpcNodeCoreAdapter, RpcNodeCoreExt},
-    EthApiTypes, RpcNodeCore,
+    EthApiTypes, RpcNodeCore, StateOverrideHook, StateOverrideHookRef,
 };
 use reth_rpc_eth_types::{
     builder::config::PendingBlockKind, receipt::EthReceiptConverter, CredibleRpcConfig,
@@ -145,8 +145,27 @@ where
         &self.converter
     }
 
+    fn state_override_hook(&self) -> Option<StateOverrideHookRef> {
+        self.state_override_hook.read().clone()
+    }
+
     fn credible_config(&self) -> CredibleRpcConfig {
         self.credible_config.clone()
+    }
+}
+
+impl<N, Rpc> EthApi<N, Rpc>
+where
+    N: RpcNodeCore,
+    Rpc: RpcConvert,
+{
+    /// Installs a hook which can add state overrides after Reth resolves the final EVM block
+    /// environment. The hook must be installed before the RPC server starts serving requests.
+    pub fn set_state_override_hook<H>(&self, hook: H)
+    where
+        H: StateOverrideHook + 'static,
+    {
+        *self.state_override_hook.write() = Some(Arc::new(hook));
     }
 }
 
@@ -294,6 +313,9 @@ pub struct EthApiInner<N: RpcNodeCore, Rpc: RpcConvert> {
 
     /// Credible Layer RPC configuration.
     credible_config: CredibleRpcConfig,
+
+    /// Optional consumer hook for state overrides that depend on the resolved EVM block.
+    state_override_hook: parking_lot::RwLock<Option<StateOverrideHookRef>>,
 }
 
 impl<N, Rpc> EthApiInner<N, Rpc>
@@ -372,6 +394,7 @@ where
             evm_memory_limit,
             force_blob_sidecar_upcasting,
             credible_config,
+            state_override_hook: parking_lot::RwLock::new(None),
         }
     }
 }

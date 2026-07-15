@@ -6,6 +6,7 @@ use core::fmt;
 use super::{LoadBlock, LoadPendingBlock, LoadState, LoadTransaction, SpawnBlocking, Trace};
 use crate::{
     helpers::estimate::EstimateCall, FromEvmError, FullEthApiTypes, RpcBlock, RpcNodeCore,
+    StateOverrideContext, StateOverrideMethod,
 };
 use alloy_consensus::{transaction::TxHashRef, BlockHeader};
 use alloy_eips::eip2930::AccessListResult;
@@ -134,7 +135,7 @@ pub trait EthCall: EstimateCall + Call + LoadPendingBlock + LoadBlock + FullEthA
                     // sanitize_chain guarantees block_overrides.number is set for every entry.
                     let target_number = credible_block_number_override(block_overrides.as_ref())
                         .unwrap_or_default();
-                    let state_overrides = this
+                    let mut state_overrides = this
                         .credible_config()
                         .apply_credible_block_override(
                             target_number,
@@ -190,6 +191,14 @@ pub trait EthCall: EstimateCall + Call + LoadPendingBlock + LoadBlock + FullEthA
                             evm_env.block_env.inner_mut(),
                         );
                     }
+
+                    this.apply_state_override_hook(
+                        StateOverrideContext {
+                            method: StateOverrideMethod::SimulateV1,
+                            block_number: evm_env.block_env.number().saturating_to(),
+                        },
+                        &mut state_overrides,
+                    );
                     if let Some(ref state_overrides) = state_overrides {
                         apply_state_overrides(state_overrides.clone(), &mut db)
                             .map_err(Self::Error::from_eth_err)?;
@@ -903,10 +912,18 @@ pub trait Call:
         // set nonce to None so that the correct nonce is chosen by the EVM
         request.as_mut().take_nonce();
 
-        if let Some(block_overrides) = overrides.block {
+        let alloy_rpc_types_eth::state::EvmOverrides { block, mut state } = overrides;
+        if let Some(block_overrides) = block {
             apply_block_overrides(*block_overrides, db, evm_env.block_env.inner_mut());
         }
-        if let Some(state_overrides) = overrides.state {
+        self.apply_state_override_hook(
+            StateOverrideContext {
+                method: StateOverrideMethod::Call,
+                block_number: evm_env.block_env.number().saturating_to(),
+            },
+            &mut state,
+        );
+        if let Some(state_overrides) = state {
             apply_state_overrides(state_overrides, db)
                 .map_err(EthApiError::from_state_overrides_err)?;
         }

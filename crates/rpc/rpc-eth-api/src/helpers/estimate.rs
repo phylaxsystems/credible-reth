@@ -1,7 +1,9 @@
 //! Estimate gas needed implementation
 
 use super::{Call, LoadPendingBlock};
-use crate::{AsEthApiError, FromEthApiError, IntoEthApiError};
+use crate::{
+    AsEthApiError, FromEthApiError, IntoEthApiError, StateOverrideContext, StateOverrideMethod,
+};
 use alloy_evm::overrides::{apply_block_overrides, apply_state_overrides};
 use alloy_network::TransactionBuilder;
 use alloy_primitives::{TxKind, U256};
@@ -84,12 +86,21 @@ pub trait EstimateCall: Call {
         // overrides for `gasLimit`, `baseFee` and `blobBaseFee` are visible to estimation.
         // Mirrors geth's behavior, see:
         // <https://github.com/ethereum/go-ethereum/pull/30695>
-        if let Some(block_overrides) = overrides.block {
+        let alloy_rpc_types_eth::state::EvmOverrides { block, mut state } = overrides;
+        if let Some(block_overrides) = block {
             apply_block_overrides(*block_overrides, &mut db, evm_env.block_env.inner_mut());
         }
 
+        self.apply_state_override_hook(
+            StateOverrideContext {
+                method: StateOverrideMethod::EstimateGas,
+                block_number: evm_env.block_env.number().saturating_to(),
+            },
+            &mut state,
+        );
+
         // Apply any state overrides if specified.
-        if let Some(state_override) = overrides.state {
+        if let Some(state_override) = state {
             apply_state_overrides(state_override, &mut db).map_err(Self::Error::from_eth_err)?;
         }
 
