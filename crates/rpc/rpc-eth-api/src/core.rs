@@ -1012,8 +1012,12 @@ where
 
 /// Applies the credible block override and pins the block the call executes at, so the marker and
 /// the EVM call resolve the same block even if the tip advances mid-request. A no-op returning
-/// `at` unchanged when no registry is configured; `pending` and an explicit
-/// `block_overrides.number` are left unpinned.
+/// `at` unchanged when no registry is configured. Only moving tags (`latest`, `safe`, `finalized`)
+/// are pinned; an exact hash or number, `pending`, and an explicit `block_overrides.number` are
+/// left unchanged.
+///
+/// An exact block hash is deliberately not pinned to a number: that would drop reorg safety, since
+/// a non-canonical or reorged hash could otherwise resolve to a different block at the same height.
 ///
 /// `pending` has no stable block identifier: it is resolved as `latest + 1`, so a tip advance can
 /// make the marker target the previous pending height.
@@ -1029,8 +1033,12 @@ fn credible_call_overrides<T: FullEthApi>(
 
     let credible_block_number =
         resolve_credible_block_number(eth_api, at, overrides.block.as_deref())?;
-    let pin_block =
-        !at.is_pending() && credible_block_number_override(overrides.block.as_deref()).is_none();
+    let pin_block = matches!(
+        at,
+        BlockId::Number(
+            BlockNumberOrTag::Latest | BlockNumberOrTag::Safe | BlockNumberOrTag::Finalized
+        )
+    ) && credible_block_number_override(overrides.block.as_deref()).is_none();
     let overrides = credible_config.apply_credible_block_override(credible_block_number, overrides);
     // A pinned block is a committed provider block number, so it always fits `u64`.
     let at =
