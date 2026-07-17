@@ -584,7 +584,7 @@ Credible Layer:
       --rpc.credible-registry-address <ADDRESS>
           Address of the on-chain `CredibleRegistry` contract.
 
-          When set, the marker override for `eth_call` / `eth_estimateGas` is derived per-request from the registry's `_credibleBlocks` mapping instead of a static override.
+          When set, the marker override for call-like RPC methods is derived per-request from the registry's `_credibleBlocks` mapping instead of a static override.
 
       --rpc.credible-retain-forwarded-private
           Retains transactions accepted by `--rpc.forwarder` as private pool transactions

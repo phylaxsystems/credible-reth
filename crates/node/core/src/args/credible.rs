@@ -8,8 +8,8 @@ use reth_rpc_eth_types::CredibleRpcConfig;
 pub struct CredibleArgs {
     /// Address of the on-chain `CredibleRegistry` contract.
     ///
-    /// When set, the marker override for `eth_call` / `eth_estimateGas` is derived per-request
-    /// from the registry's `_credibleBlocks` mapping instead of a static override.
+    /// When set, the marker override for call-like RPC methods is derived per-request from the
+    /// registry's `_credibleBlocks` mapping instead of a static override.
     #[arg(long = "rpc.credible-registry-address", value_name = "ADDRESS")]
     pub registry_address: Option<Address>,
 
