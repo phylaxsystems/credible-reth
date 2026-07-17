@@ -766,9 +766,9 @@ where
     ) -> RpcResult<Bytes> {
         trace!(target: "rpc::eth", ?request, ?block_number, ?state_overrides, ?block_overrides, "Serving eth_call");
         let at = block_number.unwrap_or_default();
-        let overrides =
+        let (at, overrides) =
             credible_call_overrides(self, at, EvmOverrides::new(state_overrides, block_overrides))?;
-        Ok(EthCall::call(self, request, block_number, overrides).await?)
+        Ok(EthCall::call(self, request, Some(at), overrides).await?)
     }
 
     /// Handler for: `eth_fillTransaction`
@@ -802,8 +802,9 @@ where
         let at = block_number.unwrap_or_default();
         // createAccessList takes no block overrides, so the credible marker derives from the
         // request's block tag. The override is a registry state-diff, so it rides on `state`.
-        let overrides = credible_call_overrides(self, at, EvmOverrides::new(state_override, None))?;
-        Ok(EthCall::create_access_list_at(self, request, block_number, overrides.state).await?)
+        let (at, overrides) =
+            credible_call_overrides(self, at, EvmOverrides::new(state_override, None))?;
+        Ok(EthCall::create_access_list_at(self, request, Some(at), overrides.state).await?)
     }
 
     /// Handler for: `eth_estimateGas`
@@ -816,7 +817,7 @@ where
     ) -> RpcResult<U256> {
         trace!(target: "rpc::eth", ?request, ?block_number, "Serving eth_estimateGas");
         let at = block_number.unwrap_or_default();
-        let overrides =
+        let (at, overrides) =
             credible_call_overrides(self, at, EvmOverrides::new(state_override, block_overrides))?;
         Ok(EthCall::estimate_gas_at(self, request, at, overrides).await?)
     }
@@ -1009,22 +1010,28 @@ where
     }
 }
 
-/// Applies the credible block override to `overrides` for a call simulated against `at`.
-///
-/// A no-op if no credible registry is configured, skipping block number resolution entirely.
+/// Applies the credible block override and pins the block the call executes at, so the marker and
+/// the EVM call resolve the same block even if the tip advances mid-request. A no-op returning
+/// `at` unchanged when no registry is configured; `pending` and an explicit
+/// `block_overrides.number` are left unpinned.
 fn credible_call_overrides<T: FullEthApi>(
     eth_api: &T,
     at: BlockId,
     overrides: EvmOverrides,
-) -> Result<EvmOverrides, T::Error> {
+) -> Result<(BlockId, EvmOverrides), T::Error> {
     let credible_config = eth_api.credible_config();
     if credible_config.registry_address.is_none() {
-        return Ok(overrides);
+        return Ok((at, overrides));
     }
 
     let credible_block_number =
         resolve_credible_block_number(eth_api, at, overrides.block.as_deref())?;
-    Ok(credible_config.apply_credible_block_override(credible_block_number, overrides))
+    let pin_block =
+        !at.is_pending() && credible_block_number_override(overrides.block.as_deref()).is_none();
+    let overrides = credible_config.apply_credible_block_override(credible_block_number, overrides);
+    let at = if pin_block { BlockId::from(credible_block_number) } else { at };
+
+    Ok((at, overrides))
 }
 
 /// Resolves the block number the EVM will actually see, for deriving the credible block
