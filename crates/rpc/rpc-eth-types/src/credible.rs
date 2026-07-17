@@ -230,7 +230,7 @@ mod tests {
     fn call_many_bundle_marker_falls_back_to_base_block() {
         // Without a bundle block override, the marker derives for the target/base block.
         assert_eq!(
-            credible_block_number_override(None).unwrap_or(U256::from(100)),
+            credible_block_number_override(None).unwrap_or_else(|| U256::from(100)),
             U256::from(100)
         );
     }

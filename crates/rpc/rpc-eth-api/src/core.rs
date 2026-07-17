@@ -1014,6 +1014,9 @@ where
 /// the EVM call resolve the same block even if the tip advances mid-request. A no-op returning
 /// `at` unchanged when no registry is configured; `pending` and an explicit
 /// `block_overrides.number` are left unpinned.
+///
+/// `pending` has no stable block identifier: it is resolved as `latest + 1`, so a tip advance can
+/// make the marker target the previous pending height.
 fn credible_call_overrides<T: FullEthApi>(
     eth_api: &T,
     at: BlockId,
