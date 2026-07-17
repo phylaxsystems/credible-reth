@@ -97,8 +97,12 @@ where
             tracing::debug!(target: "rpc::eth", %hash, "forwarding raw transaction to forwarder");
             let rlp_hex = hex::encode_prefixed(&tx);
 
-            // broadcast raw transaction to subscribers if there is any.
-            self.broadcast_raw_transaction(tx);
+            let retained_origin = self.credible_config().resolve_forwarded_origin(origin);
+            // Skip the public raw-transaction broadcast for retained-private forwarded txs, so
+            // they aren't exposed to subscribers.
+            if !retained_origin.is_private() {
+                self.broadcast_raw_transaction(tx);
+            }
 
             // The forwarder's response isn't guaranteed to be a tx hash, so only errors are
             // checked; the locally-computed hash is always returned to the caller.
@@ -111,7 +115,6 @@ where
                 .map_err(EthApiError::other)?;
 
             // Retain tx in local tx pool after forwarding, for local RPC usage.
-            let retained_origin = self.credible_config().resolve_forwarded_origin(origin);
             let _ = self.inner.add_pool_transaction(retained_origin, pool_transaction).await;
 
             return Ok(hash);
