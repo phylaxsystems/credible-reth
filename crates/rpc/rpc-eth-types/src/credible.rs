@@ -30,7 +30,7 @@ impl CredibleRpcConfig {
     /// computation — no call into the registry contract, no EVM execution, no async lookup.
     pub fn apply_credible_block_override(
         &self,
-        block_number: u64,
+        block_number: U256,
         overrides: EvmOverrides,
     ) -> EvmOverrides {
         let Some(registry) = self.registry_address else { return overrides };
@@ -65,15 +65,18 @@ impl CredibleRpcConfig {
 
 /// Computes the storage slot of `_credibleBlocks[block_number]`, matching Solidity's mapping
 /// slot derivation: `keccak256(abi.encode(block_number, base_slot))`.
-fn credible_block_slot(block_number: u64, base_slot: U256) -> B256 {
-    keccak256((U256::from(block_number), base_slot).abi_encode())
+fn credible_block_slot(block_number: U256, base_slot: U256) -> B256 {
+    keccak256((block_number, base_slot).abi_encode())
 }
 
 /// Extracts the block number the EVM will use from `block_overrides.number`, if the caller set
 /// one. This must take priority over resolving the request's block tag, since the override is
 /// applied after tag resolution.
-pub fn credible_block_number_override(block_overrides: Option<&BlockOverrides>) -> Option<u64> {
-    block_overrides.and_then(|overrides| overrides.number).map(|number| number.saturating_to())
+///
+/// Kept as `U256` (the EVM's native block-number width) so the marker slot matches the number the
+/// registry lookup sees, with no truncation.
+pub fn credible_block_number_override(block_overrides: Option<&BlockOverrides>) -> Option<U256> {
+    block_overrides.and_then(|overrides| overrides.number)
 }
 
 /// The storage override that makes `_credibleBlocks[blockNumber]` read as `true` for one
@@ -159,13 +162,14 @@ mod tests {
         // `cast index uint256 12345 1`.
         let expected: B256 =
             "0x24689f9b6ba9bad3c49d2b1293bf33fa38d0c418c093b2b4bc23f5d18e11355e".parse().unwrap();
-        assert_eq!(credible_block_slot(12345, U256::from(1)), expected);
+        assert_eq!(credible_block_slot(U256::from(12345), U256::from(1)), expected);
     }
 
     #[test]
     fn no_override_without_registry() {
         let config = CredibleRpcConfig::default();
-        let overrides = config.apply_credible_block_override(100, EvmOverrides::default());
+        let overrides =
+            config.apply_credible_block_override(U256::from(100), EvmOverrides::default());
         assert_eq!(overrides.state, None);
     }
 
@@ -174,7 +178,8 @@ mod tests {
         let registry = Address::repeat_byte(0xaa);
         let config = CredibleRpcConfig { registry_address: Some(registry), ..Default::default() };
 
-        let overrides = config.apply_credible_block_override(12345, EvmOverrides::default());
+        let overrides =
+            config.apply_credible_block_override(U256::from(12345), EvmOverrides::default());
         let state = overrides.state.expect("registry override should add state overrides");
         let account = state.get(&registry).expect("registry account should be present");
         let expected_slot: B256 =
@@ -188,7 +193,7 @@ mod tests {
     #[test]
     fn block_overrides_number_takes_priority() {
         let overrides = BlockOverrides { number: Some(U256::from(42)), ..Default::default() };
-        assert_eq!(credible_block_number_override(Some(&overrides)), Some(42));
+        assert_eq!(credible_block_number_override(Some(&overrides)), Some(U256::from(42)));
     }
 
     #[test]
@@ -205,16 +210,16 @@ mod tests {
         // target block, so the marker is derived for the block that bundle executes at.
         let registry = Address::repeat_byte(0xaa);
         let config = CredibleRpcConfig { registry_address: Some(registry), ..Default::default() };
-        let base_block = 100;
+        let base_block = U256::from(100);
         let bundle = BlockOverrides { number: Some(U256::from(250)), ..Default::default() };
 
         let number = credible_block_number_override(Some(&bundle)).unwrap_or(base_block);
-        assert_eq!(number, 250);
+        assert_eq!(number, U256::from(250));
 
         let overrides = config.apply_credible_block_override(number, EvmOverrides::default());
         let state = overrides.state.expect("registry override should add state overrides");
         let account = state.get(&registry).expect("registry account should be present");
-        let expected_slot = credible_block_slot(250, U256::from(1));
+        let expected_slot = credible_block_slot(U256::from(250), U256::from(1));
         assert_eq!(
             account.state_diff.as_ref().and_then(|diff| diff.get(&expected_slot)),
             Some(&B256::with_last_byte(1))
@@ -224,7 +229,10 @@ mod tests {
     #[test]
     fn call_many_bundle_marker_falls_back_to_base_block() {
         // Without a bundle block override, the marker derives for the target/base block.
-        assert_eq!(credible_block_number_override(None).unwrap_or(100), 100);
+        assert_eq!(
+            credible_block_number_override(None).unwrap_or(U256::from(100)),
+            U256::from(100)
+        );
     }
 
     #[test]

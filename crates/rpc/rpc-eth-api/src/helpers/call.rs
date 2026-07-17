@@ -378,7 +378,7 @@ pub trait EthCall: EstimateCall + Call + LoadPendingBlock + LoadBlock + FullEthA
 
                 // Block number each bundle executes at (its own `block_override.number`, or the
                 // target block) — this drives the credible marker slot, just like a single call.
-                let base_block_number = evm_env.block_env.number().saturating_to::<u64>();
+                let base_block_number = evm_env.block_env.number();
 
                 // transact all bundles
                 for (bundle_index, bundle) in bundles.into_iter().enumerate() {

@@ -1029,7 +1029,9 @@ fn credible_call_overrides<T: FullEthApi>(
     let pin_block =
         !at.is_pending() && credible_block_number_override(overrides.block.as_deref()).is_none();
     let overrides = credible_config.apply_credible_block_override(credible_block_number, overrides);
-    let at = if pin_block { BlockId::from(credible_block_number) } else { at };
+    // A pinned block is a committed provider block number, so it always fits `u64`.
+    let at =
+        if pin_block { BlockId::from(credible_block_number.saturating_to::<u64>()) } else { at };
 
     Ok((at, overrides))
 }
@@ -1045,7 +1047,7 @@ fn resolve_credible_block_number<T: FullEthApi>(
     eth_api: &T,
     at: BlockId,
     block_overrides: Option<&BlockOverrides>,
-) -> Result<u64, T::Error> {
+) -> Result<U256, T::Error> {
     if let Some(number) = credible_block_number_override(block_overrides) {
         return Ok(number);
     }
@@ -1057,5 +1059,5 @@ fn resolve_credible_block_number<T: FullEthApi>(
         .map_err(T::Error::from_eth_err)?
         .ok_or_else(|| T::Error::from_eth_err(EthApiError::HeaderNotFound(at)))?;
 
-    Ok(if is_pending { number.saturating_add(1) } else { number })
+    Ok(U256::from(if is_pending { number.saturating_add(1) } else { number }))
 }
