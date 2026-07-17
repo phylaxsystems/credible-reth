@@ -21,8 +21,8 @@ use reth_rpc_eth_api::{
     EthApiTypes, RpcNodeCore,
 };
 use reth_rpc_eth_types::{
-    builder::config::PendingBlockKind, receipt::EthReceiptConverter, EthApiError, EthStateCache,
-    FeeHistoryCache, GasCap, GasPriceOracle, PendingBlock,
+    builder::config::PendingBlockKind, receipt::EthReceiptConverter, CredibleRpcConfig,
+    EthApiError, EthStateCache, FeeHistoryCache, GasCap, GasPriceOracle, PendingBlock,
 };
 use reth_storage_api::{noop::NoopProvider, BlockReaderIdExt, ProviderHeader};
 use reth_tasks::{
@@ -143,6 +143,10 @@ where
 
     fn converter(&self) -> &Self::RpcConvert {
         &self.converter
+    }
+
+    fn credible_config(&self) -> CredibleRpcConfig {
+        self.credible_config.clone()
     }
 }
 
@@ -287,6 +291,9 @@ pub struct EthApiInner<N: RpcNodeCore, Rpc: RpcConvert> {
 
     /// Whether to force upcasting EIP-4844 blob sidecars to EIP-7594 format when Osaka is active.
     force_blob_sidecar_upcasting: bool,
+
+    /// Credible Layer RPC configuration.
+    credible_config: CredibleRpcConfig,
 }
 
 impl<N, Rpc> EthApiInner<N, Rpc>
@@ -317,6 +324,7 @@ where
         send_raw_transaction_sync_timeout: Duration,
         evm_memory_limit: u64,
         force_blob_sidecar_upcasting: bool,
+        credible_config: CredibleRpcConfig,
     ) -> Self {
         let signers = parking_lot::RwLock::new(Default::default());
         // get the block number of the latest block
@@ -363,6 +371,7 @@ where
             blob_sidecar_converter: BlobSidecarConverter::new(),
             evm_memory_limit,
             force_blob_sidecar_upcasting,
+            credible_config,
         }
     }
 }

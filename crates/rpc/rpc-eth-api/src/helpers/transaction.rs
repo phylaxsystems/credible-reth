@@ -185,10 +185,15 @@ pub trait EthTransactions: LoadTransaction<Provider: BlockReaderIdExt> {
     }
 
     /// Returns all transactions from the local pending pool.
+    ///
+    /// When the Credible Layer retains forwarded transactions as private, every private-origin
+    /// pool transaction is filtered out so it never leaks on the public endpoint before inclusion.
     fn pending_transactions(&self) -> Result<Vec<RpcTransaction<Self::NetworkTypes>>, Self::Error> {
+        let hide_private = self.credible_config().hide_private_pool_txs();
         self.pool()
             .pending_transactions()
             .into_iter()
+            .filter(|tx| !hide_private || !tx.origin.is_private())
             .map(|tx| self.converter().fill_pending(tx.transaction.clone_into_consensus()))
             .collect::<Result<Vec<_>, _>>()
             .map_err(Self::Error::from)
@@ -224,9 +229,16 @@ pub trait EthTransactions: LoadTransaction<Provider: BlockReaderIdExt> {
         hash: B256,
     ) -> impl Future<Output = Result<Option<Bytes>, Self::Error>> + Send {
         async move {
-            // Note: this is mostly used to fetch pooled transactions so we check the pool first
-            if let Some(tx) =
-                self.pool().get_pooled_transaction_element(hash).map(|tx| tx.encoded_2718().into())
+            // Note: this is mostly used to fetch pooled transactions so we check the pool first.
+            // Suppress the pooled copy of a retained-private tx so its raw bytes don't leak before
+            // inclusion; once mined, the provider lookup below still returns it.
+            let private_in_pool = self.credible_config().hide_private_pool_txs() &&
+                self.pool().get(&hash).is_some_and(|tx| tx.origin.is_private());
+            if let Some(tx) = self
+                .pool()
+                .get_pooled_transaction_element(hash)
+                .filter(|_| !private_in_pool)
+                .map(|tx| tx.encoded_2718().into())
             {
                 return Ok(Some(tx))
             }
@@ -734,9 +746,15 @@ pub trait LoadTransaction: SpawnBlocking + FullEthApiTypes + RpcNodeCoreExt {
             }
 
             // tx not found on disk, check pool
-            if let Some(tx) = self.pool().get(&hash).map(|tx| tx.transaction.clone_into_consensus())
-            {
-                return Ok(Some(TransactionSource::Pool(tx.into())));
+            if let Some(tx) = self.pool().get(&hash) {
+                // Suppress the pooled copy of a retained-private tx so it doesn't leak before
+                // inclusion; once mined, the on-disk lookup above returns it.
+                let hide_private =
+                    self.credible_config().hide_private_pool_txs() && tx.origin.is_private();
+                if !hide_private {
+                    let tx = tx.transaction.clone_into_consensus();
+                    return Ok(Some(TransactionSource::Pool(tx.into())));
+                }
             }
 
             Ok(None)

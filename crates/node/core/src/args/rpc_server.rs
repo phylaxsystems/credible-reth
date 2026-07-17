@@ -2,7 +2,7 @@
 
 use crate::args::{
     types::{MaxU32, ZeroAsNoneU64},
-    GasPriceOracleArgs, RpcStateCacheArgs,
+    CredibleArgs, GasPriceOracleArgs, RpcStateCacheArgs,
 };
 use alloy_primitives::map::AddressSet;
 use alloy_rpc_types_engine::JwtSecret;
@@ -691,6 +691,10 @@ pub struct RpcServerArgs {
     /// By default this is disabled, meaning transactions are submitted as-is.
     #[arg(long = "rpc.force-blob-sidecar-upcasting", default_value_t = false)]
     pub rpc_force_blob_sidecar_upcasting: bool,
+
+    /// Credible Layer RPC configuration.
+    #[command(flatten)]
+    pub credible: CredibleArgs,
 }
 
 impl RpcServerArgs {
@@ -928,6 +932,7 @@ impl Default for RpcServerArgs {
             testing_skip_invalid_transactions: true,
             testing_gas_limit: None,
             rpc_force_blob_sidecar_upcasting: false,
+            credible: CredibleArgs::default(),
         }
     }
 }
@@ -1119,6 +1124,7 @@ mod tests {
             testing_skip_invalid_transactions: true,
             testing_gas_limit: None,
             rpc_force_blob_sidecar_upcasting: false,
+            credible: CredibleArgs::default(),
         };
 
         let parsed_args = CommandParser::<RpcServerArgs>::parse_from([

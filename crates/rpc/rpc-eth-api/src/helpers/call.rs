@@ -34,6 +34,7 @@ use reth_revm::{
 use reth_rpc_convert::{RpcConvert, RpcTxReq};
 use reth_rpc_eth_types::{
     cache::db::StateProviderTraitObjWrapper,
+    credible::credible_block_number_override,
     error::{AsEthApiError, FromEthApiError},
     simulate::{self, EthSimulateError},
     EthApiError, StateCacheDb,
@@ -129,6 +130,22 @@ pub trait EthCall: EstimateCall + Call + LoadPendingBlock + LoadBlock + FullEthA
 
                 for block in block_state_calls {
                     let SimBlock { block_overrides, state_overrides, calls } = block;
+
+                    // sanitize_chain guarantees block_overrides.number is set for every entry; if
+                    // it is ever absent, skip the marker rather than writing it to the wrong
+                    // (block 0) slot.
+                    let state_overrides =
+                        match credible_block_number_override(block_overrides.as_ref()) {
+                            Some(target_number) => {
+                                this.credible_config()
+                                    .apply_credible_block_override(
+                                        target_number,
+                                        EvmOverrides::state(state_overrides),
+                                    )
+                                    .state
+                            }
+                            None => state_overrides,
+                        };
 
                     let attributes = this
                         .pending_env_builder()
@@ -359,6 +376,10 @@ pub trait EthCall: EstimateCall + Call + LoadPendingBlock + LoadBlock + FullEthA
                     }
                 }
 
+                // Block number each bundle executes at (its own `block_override.number`, or the
+                // target block) — this drives the credible marker slot, just like a single call.
+                let base_block_number = evm_env.block_env.number().saturating_to::<u64>();
+
                 // transact all bundles
                 for (bundle_index, bundle) in bundles.into_iter().enumerate() {
                     let Bundle { transactions, block_override } = bundle;
@@ -369,13 +390,26 @@ pub trait EthCall: EstimateCall + Call + LoadPendingBlock + LoadBlock + FullEthA
 
                     let mut bundle_results = Vec::with_capacity(transactions.len());
                     let block_overrides = block_override.map(Box::new);
+                    let bundle_block_number =
+                        credible_block_number_override(block_overrides.as_deref())
+                            .unwrap_or(base_block_number);
 
                     // transact all transactions in the bundle
                     for (tx_index, tx) in transactions.into_iter().enumerate() {
-                        // Apply overrides, state overrides are only applied for the first tx in the
-                        // request
-                        let overrides =
-                            EvmOverrides::new(state_override.take(), block_overrides.clone());
+                        // State overrides apply only on the first tx of each bundle; inject the
+                        // credible marker per bundle for that bundle's block (no-op with no
+                        // registry).
+                        let state = if tx_index == 0 {
+                            this.credible_config()
+                                .apply_credible_block_override(
+                                    bundle_block_number,
+                                    EvmOverrides::state(state_override.take()),
+                                )
+                                .state
+                        } else {
+                            None
+                        };
+                        let overrides = EvmOverrides::new(state, block_overrides.clone());
 
                         let (current_evm_env, prepared_tx) = this
                             .prepare_call_env(evm_env.clone(), tx, &mut db, overrides)
