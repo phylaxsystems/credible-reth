@@ -459,6 +459,13 @@ pub trait TransactionPool: Clone + Debug + Send + Sync {
         (0, 0)
     }
 
+    /// Returns `((pending, queued), (private_pending, private_queued))` from a single snapshot, so
+    /// callers can subtract the private counts consistently. The default delegates to the two
+    /// separate accessors; pools holding private transactions should override it.
+    fn pending_and_queued_txn_count_with_private(&self) -> ((usize, usize), (usize, usize)) {
+        (self.pending_and_queued_txn_count(), self.private_pending_and_queued_txn_count())
+    }
+
     /// Returns all transactions that are currently in the pool grouped by whether they are ready
     /// for inclusion in the next block or not.
     ///
