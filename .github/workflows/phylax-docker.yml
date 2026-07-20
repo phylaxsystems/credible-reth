@@ -54,3 +54,5 @@ jobs:
           platforms: linux/amd64
           push: ${{ !(github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
           tags: ghcr.io/${{ github.repository }}/reth:sha-${{ steps.git.outputs.short_sha }}
+          cache-from: type=registry,ref=ghcr.io/${{ github.repository }}/reth:buildcache
+          cache-to: type=registry,ref=ghcr.io/${{ github.repository }}/reth:buildcache,mode=max
