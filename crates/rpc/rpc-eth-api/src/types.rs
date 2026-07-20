@@ -4,6 +4,7 @@ use crate::{AsEthApiError, FromEthApiError, RpcNodeCore};
 use alloy_rpc_types_eth::Block;
 use reth_rpc_convert::{RpcConvert, SignableTxRequest};
 pub use reth_rpc_convert::{RpcTransaction, RpcTxReq, RpcTypes};
+use reth_rpc_eth_types::CredibleRpcConfig;
 use reth_storage_api::ProviderTx;
 use std::error::Error;
 
@@ -31,6 +32,13 @@ pub trait EthApiTypes: Send + Sync + Clone {
 
     /// Returns reference to transaction response builder.
     fn converter(&self) -> &Self::RpcConvert;
+
+    /// Returns the Credible Layer RPC configuration active for this API instance.
+    ///
+    /// Defaults to a disabled configuration.
+    fn credible_config(&self) -> CredibleRpcConfig {
+        CredibleRpcConfig::default()
+    }
 }
 
 /// Adapter for network specific block type.

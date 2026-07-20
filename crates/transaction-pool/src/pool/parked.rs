@@ -38,6 +38,11 @@ pub struct ParkedPool<T: ParkedOrd> {
     ///
     /// See also [`reth_primitives_traits::InMemorySize::size`].
     size_of: SizeTracker,
+    /// Running count of [`crate::TransactionOrigin::Private`] transactions in the pool.
+    ///
+    /// Maintained alongside `size_of` so callers can read the private count without walking the
+    /// pool. See [`Self::private_pool_count()`].
+    private_pool_count: usize,
 }
 
 // === impl ParkedPool ===
@@ -55,6 +60,9 @@ impl<T: ParkedOrd> ParkedPool<T> {
 
         // keep track of size
         self.size_of += tx.size();
+        if tx.origin.is_private() {
+            self.private_pool_count += 1;
+        }
 
         // update or create sender entry
         self.add_sender_count(tx.sender_id(), submission_id);
@@ -134,6 +142,10 @@ impl<T: ParkedOrd> ParkedPool<T> {
 
         // keep track of size
         self.size_of -= tx.transaction.size();
+        if tx.transaction.origin.is_private() {
+            debug_assert!(self.private_pool_count > 0, "private_pool_count underflow");
+            self.private_pool_count = self.private_pool_count.saturating_sub(1);
+        }
 
         Some(tx.transaction.into())
     }
@@ -229,6 +241,11 @@ impl<T: ParkedOrd> ParkedPool<T> {
     /// Number of transactions in the entire pool
     pub(crate) fn len(&self) -> usize {
         self.by_id.len()
+    }
+
+    /// Number of [`crate::TransactionOrigin::Private`] transactions in the pool.
+    pub(crate) const fn private_pool_count(&self) -> usize {
+        self.private_pool_count
     }
 
     /// Returns true if the pool exceeds the given limit
@@ -353,6 +370,7 @@ impl<T: ParkedOrd> Default for ParkedPool<T> {
             last_sender_submission: Default::default(),
             sender_transaction_count: Default::default(),
             size_of: Default::default(),
+            private_pool_count: 0,
         }
     }
 }

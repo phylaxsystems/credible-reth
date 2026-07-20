@@ -48,6 +48,10 @@ pub use gas_price_oracle::GasPriceOracleArgs;
 mod txpool;
 pub use txpool::{DefaultTxPoolValues, TxPoolArgs};
 
+/// `CredibleArgs` struct for configuring Credible Layer RPC behavior
+mod credible;
+pub use credible::CredibleArgs;
+
 /// DevArgs for configuring the dev testnet
 mod dev;
 pub use dev::DevArgs;

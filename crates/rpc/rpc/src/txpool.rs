@@ -12,6 +12,7 @@ use reth_primitives_traits::NodePrimitives;
 use reth_rpc_api::TxPoolApiServer;
 use reth_rpc_convert::{RpcConvert, RpcTypes};
 use reth_rpc_eth_api::RpcTransaction;
+use reth_rpc_eth_types::CredibleRpcConfig;
 use reth_transaction_pool::{
     AllPoolTransactions, PoolConsensusTx, PoolTransaction, TransactionPool,
 };
@@ -25,12 +26,13 @@ pub struct TxPoolApi<Pool, Eth> {
     /// An interface to interact with the pool
     pool: Pool,
     converter: Eth,
+    credible_config: CredibleRpcConfig,
 }
 
 impl<Pool, Eth> TxPoolApi<Pool, Eth> {
     /// Creates a new instance of `TxpoolApi`.
-    pub const fn new(pool: Pool, converter: Eth) -> Self {
-        Self { pool, converter }
+    pub const fn new(pool: Pool, converter: Eth, credible_config: CredibleRpcConfig) -> Self {
+        Self { pool, converter, credible_config }
     }
 }
 
@@ -61,13 +63,21 @@ where
             Ok(())
         }
 
+        // With Credible Layer retention, private-origin pool txs must not leak before inclusion.
+        let hide_private = self.credible_config.hide_private_pool_txs();
         let AllPoolTransactions { pending, queued } = self.pool.all_transactions();
 
         let mut content = TxpoolContent::default();
         for pending in pending {
+            if hide_private && pending.origin.is_private() {
+                continue;
+            }
             insert::<_, Eth>(&pending.transaction, &mut content.pending, &self.converter)?;
         }
         for queued in queued {
+            if hide_private && queued.origin.is_private() {
+                continue;
+            }
             insert::<_, Eth>(&queued.transaction, &mut content.queued, &self.converter)?;
         }
 
@@ -88,7 +98,17 @@ where
     /// Handler for `txpool_status`
     async fn txpool_status(&self) -> RpcResult<TxpoolStatus> {
         trace!(target: "rpc::eth", "Serving txpool_status");
-        let (pending, queued) = self.pool.pending_and_queued_txn_count();
+        // Read totals and private counts from a single snapshot: reading them separately lets a tx
+        // moving between sub-pools leave a private tx in the public count under retention.
+        let ((pending, queued), (private_pending, private_queued)) =
+            self.pool.total_and_private_txn_counts();
+        // With Credible Layer retention, exclude private-origin txs from the public counts.
+        if self.credible_config.hide_private_pool_txs() {
+            return Ok(TxpoolStatus {
+                pending: pending.saturating_sub(private_pending) as u64,
+                queued: queued.saturating_sub(private_queued) as u64,
+            });
+        }
         Ok(TxpoolStatus { pending: pending as u64, queued: queued as u64 })
     }
 
@@ -111,17 +131,25 @@ where
             entry.insert(tx.nonce().to_string(), tx.into_inner().into());
         }
 
+        // With Credible Layer retention, private-origin pool txs must not leak before inclusion.
+        let hide_private = self.credible_config.hide_private_pool_txs();
         let AllPoolTransactions { pending, queued } = self.pool.all_transactions();
 
         Ok(TxpoolInspect {
-            pending: pending.iter().fold(Default::default(), |mut acc, tx| {
-                insert(&tx.transaction, &mut acc);
-                acc
-            }),
-            queued: queued.iter().fold(Default::default(), |mut acc, tx| {
-                insert(&tx.transaction, &mut acc);
-                acc
-            }),
+            pending: pending.iter().filter(|tx| !hide_private || !tx.origin.is_private()).fold(
+                Default::default(),
+                |mut acc, tx| {
+                    insert(&tx.transaction, &mut acc);
+                    acc
+                },
+            ),
+            queued: queued.iter().filter(|tx| !hide_private || !tx.origin.is_private()).fold(
+                Default::default(),
+                |mut acc, tx| {
+                    insert(&tx.transaction, &mut acc);
+                    acc
+                },
+            ),
         })
     }
 
@@ -152,5 +180,62 @@ where
 impl<Pool, Eth> fmt::Debug for TxPoolApi<Pool, Eth> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("TxpoolApi").finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::eth::helpers::types::EthRpcConverter;
+    use reth_chainspec::MAINNET;
+    use reth_rpc_eth_types::receipt::EthReceiptConverter;
+    use reth_transaction_pool::{
+        test_utils::{testing_pool, MockTransaction},
+        TransactionOrigin,
+    };
+
+    #[tokio::test]
+    async fn txpool_hides_retained_private_txs() {
+        let public_sender = Address::repeat_byte(0x11);
+        let private_sender = Address::repeat_byte(0x22);
+
+        let pool = testing_pool();
+        pool.add_transaction(
+            TransactionOrigin::External,
+            MockTransaction::eip1559().with_nonce(0).with_sender(public_sender),
+        )
+        .await
+        .unwrap();
+        pool.add_transaction(
+            TransactionOrigin::Private,
+            MockTransaction::eip1559().with_nonce(0).with_sender(private_sender),
+        )
+        .await
+        .unwrap();
+
+        let converter = EthRpcConverter::new(EthReceiptConverter::new(MAINNET.clone()));
+
+        // Retention enabled: the private-origin tx is hidden, the public one remains.
+        let api = TxPoolApi::new(
+            pool.clone(),
+            converter.clone(),
+            CredibleRpcConfig { retain_forwarded_txs_as_private: true, ..Default::default() },
+        );
+        let content = api.txpool_content().await.unwrap();
+        assert!(
+            content.pending.contains_key(&public_sender) ||
+                content.queued.contains_key(&public_sender)
+        );
+        assert!(
+            !content.pending.contains_key(&private_sender) &&
+                !content.queued.contains_key(&private_sender)
+        );
+        let status = api.txpool_status().await.unwrap();
+        assert_eq!(status.pending + status.queued, 1);
+
+        // Retention disabled: both transactions are visible.
+        let api = TxPoolApi::new(pool, converter, CredibleRpcConfig::default());
+        let status = api.txpool_status().await.unwrap();
+        assert_eq!(status.pending + status.queued, 2);
     }
 }

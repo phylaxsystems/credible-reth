@@ -11,7 +11,7 @@ use reth_primitives_traits::{AlloyBlockHeader, WithEncoded};
 use reth_rpc_convert::RpcConvert;
 use reth_rpc_eth_api::{
     helpers::{spec::SignersForRpc, EthTransactions, LoadTransaction},
-    FromEvmError, RpcNodeCore,
+    EthApiTypes, FromEvmError, RpcNodeCore,
 };
 use reth_rpc_eth_types::{error::RpcPoolError, EthApiError};
 use reth_storage_api::BlockReaderIdExt;
@@ -93,19 +93,29 @@ where
 
         // forward the transaction to the specific endpoint if configured.
         if let Some(client) = self.raw_tx_forwarder() {
-            tracing::debug!(target: "rpc::eth", hash = %pool_transaction.hash(), "forwarding raw transaction to forwarder");
+            let hash = *pool_transaction.hash();
+            tracing::debug!(target: "rpc::eth", %hash, "forwarding raw transaction to forwarder");
             let rlp_hex = hex::encode_prefixed(&tx);
 
-            // broadcast raw transaction to subscribers if there is any.
-            self.broadcast_raw_transaction(tx);
+            let retained_origin = self.credible_config().resolve_forwarded_origin(origin);
+            // Skip the public raw-transaction broadcast for retained-private forwarded txs, so
+            // they aren't exposed to subscribers.
+            if !retained_origin.is_private() {
+                self.broadcast_raw_transaction(tx);
+            }
 
-            let hash =
-                client.request("eth_sendRawTransaction", (rlp_hex,)).await.inspect_err(|err| {
-                    tracing::debug!(target: "rpc::eth", %err, hash=% *pool_transaction.hash(), "failed to forward raw transaction");
-                }).map_err(EthApiError::other)?;
+            // The forwarder's response isn't guaranteed to be a tx hash, so only errors are
+            // checked; the locally-computed hash is always returned to the caller.
+            client
+                .request::<_, serde_json::Value>("eth_sendRawTransaction", (rlp_hex,))
+                .await
+                .inspect_err(|err| {
+                    tracing::debug!(target: "rpc::eth", %err, %hash, "failed to forward raw transaction");
+                })
+                .map_err(EthApiError::other)?;
 
             // Retain tx in local tx pool after forwarding, for local RPC usage.
-            let _ = self.inner.add_pool_transaction(origin, pool_transaction).await;
+            let _ = self.inner.add_pool_transaction(retained_origin, pool_transaction).await;
 
             return Ok(hash);
         }

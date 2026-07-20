@@ -637,6 +637,14 @@ where
         (pending, queued)
     }
 
+    fn private_pending_and_queued_txn_count(&self) -> (usize, usize) {
+        self.pool.get_pool_data().private_pending_and_queued_txn_count()
+    }
+
+    fn total_and_private_txn_counts(&self) -> ((usize, usize), (usize, usize)) {
+        self.pool.get_pool_data().total_and_private_txn_counts()
+    }
+
     fn all_transactions(&self) -> AllPoolTransactions<Self::Transaction> {
         self.pool.all_transactions()
     }
