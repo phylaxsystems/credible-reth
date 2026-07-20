@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 /// Base storage slot of `CredibleRegistry`'s `_credibleBlocks` mapping, per its current
 /// storage layout (`forge inspect CredibleRegistry storage-layout`).
-const DEFAULT_CREDIBLE_BLOCKS_BASE_SLOT: u64 = 1;
+const CREDIBLE_BLOCKS_BASE_SLOT: u64 = 1;
 
 /// Credible Layer behavior toggles for the `eth` RPC namespace.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -38,7 +38,7 @@ impl CredibleRpcConfig {
 
         let block_override = CredibleBlockOverride {
             address: registry,
-            slot: credible_block_slot(block_number, U256::from(DEFAULT_CREDIBLE_BLOCKS_BASE_SLOT)),
+            slot: credible_block_slot(block_number, U256::from(CREDIBLE_BLOCKS_BASE_SLOT)),
             value: B256::with_last_byte(1),
         };
         block_override.apply_to(state)
