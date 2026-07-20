@@ -179,3 +179,60 @@ impl<Pool, Eth> fmt::Debug for TxPoolApi<Pool, Eth> {
         f.debug_struct("TxpoolApi").finish_non_exhaustive()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::eth::helpers::types::EthRpcConverter;
+    use reth_chainspec::MAINNET;
+    use reth_rpc_eth_types::receipt::EthReceiptConverter;
+    use reth_transaction_pool::{
+        test_utils::{testing_pool, MockTransaction},
+        TransactionOrigin,
+    };
+
+    #[tokio::test]
+    async fn txpool_hides_retained_private_txs() {
+        let public_sender = Address::repeat_byte(0x11);
+        let private_sender = Address::repeat_byte(0x22);
+
+        let pool = testing_pool();
+        pool.add_transaction(
+            TransactionOrigin::External,
+            MockTransaction::eip1559().with_nonce(0).with_sender(public_sender),
+        )
+        .await
+        .unwrap();
+        pool.add_transaction(
+            TransactionOrigin::Private,
+            MockTransaction::eip1559().with_nonce(0).with_sender(private_sender),
+        )
+        .await
+        .unwrap();
+
+        let converter = EthRpcConverter::new(EthReceiptConverter::new(MAINNET.clone()));
+
+        // Retention enabled: the private-origin tx is hidden, the public one remains.
+        let api = TxPoolApi::new(
+            pool.clone(),
+            converter.clone(),
+            CredibleRpcConfig { retain_forwarded_txs_as_private: true, ..Default::default() },
+        );
+        let content = api.txpool_content().await.unwrap();
+        assert!(
+            content.pending.contains_key(&public_sender) ||
+                content.queued.contains_key(&public_sender)
+        );
+        assert!(
+            !content.pending.contains_key(&private_sender) &&
+                !content.queued.contains_key(&private_sender)
+        );
+        let status = api.txpool_status().await.unwrap();
+        assert_eq!(status.pending + status.queued, 1);
+
+        // Retention disabled: both transactions are visible.
+        let api = TxPoolApi::new(pool, converter, CredibleRpcConfig::default());
+        let status = api.txpool_status().await.unwrap();
+        assert_eq!(status.pending + status.queued, 2);
+    }
+}
