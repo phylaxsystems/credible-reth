@@ -88,8 +88,13 @@ pub trait EstimateCall: Call {
             apply_block_overrides(*block_overrides, &mut db, evm_env.block_env.inner_mut());
         }
 
-        // Apply any state overrides if specified.
-        if let Some(state_override) = overrides.state {
+        // Inject the Credible Layer marker for the block the EVM will execute at (after any block
+        // override is applied), so the marker slot and the execution resolve the same block. No-op
+        // unless a registry is configured.
+        let state_override = self
+            .credible_config()
+            .apply_credible_block_override(evm_env.block_env.number(), overrides.state);
+        if let Some(state_override) = state_override {
             apply_state_overrides(state_override, &mut db).map_err(Self::Error::from_eth_err)?;
         }
 
