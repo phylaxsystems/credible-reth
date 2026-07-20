@@ -580,6 +580,15 @@ Gas Price Oracle:
 
           When enabled, blob transactions submitted via `eth_sendRawTransaction` with EIP-4844 sidecars will be automatically converted to EIP-7594 format if the next block is Osaka. By default this is disabled, meaning transactions are submitted as-is.
 
+Credible Layer:
+      --rpc.credible-registry-address <ADDRESS>
+          Address of the on-chain `CredibleRegistry` contract.
+
+          When set, the marker override for call-like RPC methods is derived per-request from the registry's `_credibleBlocks` mapping instead of a static override.
+
+      --rpc.credible-retain-forwarded-private
+          Retains transactions accepted by `--rpc.forwarder` as private pool transactions
+
 TxPool:
       --txpool.pending-max-count <PENDING_MAX_COUNT>
           Max number of transactions in the pending sub-pool

@@ -185,10 +185,15 @@ pub trait EthTransactions: LoadTransaction<Provider: BlockReaderIdExt> {
     }
 
     /// Returns all transactions from the local pending pool.
+    ///
+    /// When the Credible Layer retains forwarded transactions as private, every private-origin
+    /// pool transaction is filtered out so it never leaks on the public endpoint before inclusion.
     fn pending_transactions(&self) -> Result<Vec<RpcTransaction<Self::NetworkTypes>>, Self::Error> {
+        let hide_private = self.credible_config().hide_private_pool_txs();
         self.pool()
             .pending_transactions()
             .into_iter()
+            .filter(|tx| !hide_private || !tx.origin.is_private())
             .map(|tx| self.converter().fill_pending(tx.transaction.clone_into_consensus()))
             .collect::<Result<Vec<_>, _>>()
             .map_err(Self::Error::from)
@@ -224,11 +229,19 @@ pub trait EthTransactions: LoadTransaction<Provider: BlockReaderIdExt> {
         hash: B256,
     ) -> impl Future<Output = Result<Option<Bytes>, Self::Error>> + Send {
         async move {
-            // Note: this is mostly used to fetch pooled transactions so we check the pool first
-            if let Some(tx) =
-                self.pool().get_pooled_transaction_element(hash).map(|tx| tx.encoded_2718().into())
-            {
-                return Ok(Some(tx))
+            // Check the pool first. Gate the raw-byte fetch on the entry's own origin so a
+            // retained-private tx can't leak its bytes before inclusion.
+            if let Some(pool_tx) = self.pool().get(&hash) {
+                let hide_private =
+                    self.credible_config().hide_private_pool_txs() && pool_tx.origin.is_private();
+                if !hide_private &&
+                    let Some(tx) = self
+                        .pool()
+                        .get_pooled_transaction_element(hash)
+                        .map(|tx| tx.encoded_2718().into())
+                {
+                    return Ok(Some(tx))
+                }
             }
 
             self.spawn_blocking_io(move |ref this| {

@@ -507,6 +507,23 @@ impl<T: TransactionOrdering> TxPool<T> {
         self.basefee_pool.len() + self.queued_pool.len()
     }
 
+    /// Returns the number of [`crate::TransactionOrigin::Private`] transactions in the pending and
+    /// queued sub-pools, using the same sub-pool grouping as
+    /// [`Self::pending_transactions_count`]/[`Self::queued_transactions_count`].
+    pub(crate) const fn private_pending_and_queued_txn_count(&self) -> (usize, usize) {
+        let pending = self.pending_pool.private_pool_count();
+        let queued = self.basefee_pool.private_pool_count() + self.queued_pool.private_pool_count();
+        (pending, queued)
+    }
+
+    /// Returns `((pending, queued), (private_pending, private_queued))` from this single pool view,
+    /// so callers can subtract the private counts without a cross-snapshot race.
+    pub(crate) fn total_and_private_txn_counts(&self) -> ((usize, usize), (usize, usize)) {
+        let pending = self.pending_transactions_count();
+        let queued = self.queued_transactions_count();
+        ((pending, queued), self.private_pending_and_queued_txn_count())
+    }
+
     /// Returns queued and pending transactions for the specified sender
     pub fn queued_and_pending_txs_by_sender(
         &self,
@@ -2473,6 +2490,41 @@ mod tests {
         // make sure the blob transaction was promoted into the pending pool
         assert_eq!(pool.blob_pool.len(), 1);
         assert!(pool.pending_pool.is_empty());
+    }
+
+    #[test]
+    fn private_pool_count_tracks_pending_and_queued() {
+        let on_chain_balance = U256::MAX;
+        let on_chain_nonce = 0;
+        let mut f = MockTransactionFactory::default();
+        let mut pool = TxPool::new(MockOrdering::default(), Default::default());
+
+        // Private tx at the on-chain nonce lands in the pending sub-pool.
+        let private_pending =
+            f.validated_with_origin(TransactionOrigin::Private, MockTransaction::eip1559());
+        let private_pending_id = *private_pending.id();
+        pool.add_transaction(private_pending, on_chain_balance, on_chain_nonce, None).unwrap();
+
+        // Public tx at the on-chain nonce is also pending but must not be counted.
+        let public_pending =
+            f.validated_with_origin(TransactionOrigin::External, MockTransaction::eip1559());
+        pool.add_transaction(public_pending, on_chain_balance, on_chain_nonce, None).unwrap();
+
+        // Private tx with a nonce gap parks in the queued sub-pool.
+        let private_queued = f.validated_with_origin(
+            TransactionOrigin::Private,
+            MockTransaction::eip1559().with_nonce(1),
+        );
+        pool.add_transaction(private_queued, on_chain_balance, on_chain_nonce, None).unwrap();
+
+        assert_eq!(pool.private_pending_and_queued_txn_count(), (1, 1));
+        // The combined accessor reports totals (2 pending, 1 queued) and private counts together.
+        assert_eq!(pool.total_and_private_txn_counts(), ((2, 1), (1, 1)));
+
+        // Removing the pending private tx decrements only the pending count.
+        pool.remove_transaction(&private_pending_id);
+        assert_eq!(pool.private_pending_and_queued_txn_count(), (0, 1));
+        assert_eq!(pool.total_and_private_txn_counts(), ((1, 1), (0, 1)));
     }
 
     #[test]

@@ -1005,6 +1005,7 @@ where
                         RethRpcModule::Txpool => TxPoolApi::new(
                             self.eth.api.pool().clone(),
                             dyn_clone::clone(self.eth.api.converter()),
+                            self.eth.api.credible_config(),
                         )
                         .into_rpc()
                         .into(),
