@@ -518,9 +518,7 @@ impl<T: TransactionOrdering> TxPool<T> {
 
     /// Returns `((pending, queued), (private_pending, private_queued))` from this single pool view,
     /// so callers can subtract the private counts without a cross-snapshot race.
-    pub(crate) fn pending_and_queued_txn_count_with_private(
-        &self,
-    ) -> ((usize, usize), (usize, usize)) {
+    pub(crate) fn total_and_private_txn_counts(&self) -> ((usize, usize), (usize, usize)) {
         let pending = self.pending_transactions_count();
         let queued = self.queued_transactions_count();
         ((pending, queued), self.private_pending_and_queued_txn_count())
@@ -2521,12 +2519,12 @@ mod tests {
 
         assert_eq!(pool.private_pending_and_queued_txn_count(), (1, 1));
         // The combined accessor reports totals (2 pending, 1 queued) and private counts together.
-        assert_eq!(pool.pending_and_queued_txn_count_with_private(), ((2, 1), (1, 1)));
+        assert_eq!(pool.total_and_private_txn_counts(), ((2, 1), (1, 1)));
 
         // Removing the pending private tx decrements only the pending count.
         pool.remove_transaction(&private_pending_id);
         assert_eq!(pool.private_pending_and_queued_txn_count(), (0, 1));
-        assert_eq!(pool.pending_and_queued_txn_count_with_private(), ((1, 1), (0, 1)));
+        assert_eq!(pool.total_and_private_txn_counts(), ((1, 1), (0, 1)));
     }
 
     #[test]
