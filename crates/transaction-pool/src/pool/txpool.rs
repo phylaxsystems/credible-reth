@@ -507,8 +507,8 @@ impl<T: TransactionOrdering> TxPool<T> {
         self.basefee_pool.len() + self.queued_pool.len()
     }
 
-    /// Returns the number of [`TransactionOrigin::Private`] transactions in the pending and queued
-    /// sub-pools, using the same sub-pool grouping as
+    /// Returns the number of [`crate::TransactionOrigin::Private`] transactions in the pending and
+    /// queued sub-pools, using the same sub-pool grouping as
     /// [`Self::pending_transactions_count`]/[`Self::queued_transactions_count`].
     pub(crate) const fn private_pending_and_queued_txn_count(&self) -> (usize, usize) {
         let pending = self.pending_pool.private_pool_count();
