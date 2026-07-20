@@ -746,15 +746,9 @@ pub trait LoadTransaction: SpawnBlocking + FullEthApiTypes + RpcNodeCoreExt {
             }
 
             // tx not found on disk, check pool
-            if let Some(tx) = self.pool().get(&hash) {
-                // Suppress the pooled copy of a retained-private tx so it doesn't leak before
-                // inclusion; once mined, the on-disk lookup above returns it.
-                let hide_private =
-                    self.credible_config().hide_private_pool_txs() && tx.origin.is_private();
-                if !hide_private {
-                    let tx = tx.transaction.clone_into_consensus();
-                    return Ok(Some(TransactionSource::Pool(tx.into())));
-                }
+            if let Some(tx) = self.pool().get(&hash).map(|tx| tx.transaction.clone_into_consensus())
+            {
+                return Ok(Some(TransactionSource::Pool(tx.into())));
             }
 
             Ok(None)
