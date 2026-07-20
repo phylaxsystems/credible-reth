@@ -229,18 +229,19 @@ pub trait EthTransactions: LoadTransaction<Provider: BlockReaderIdExt> {
         hash: B256,
     ) -> impl Future<Output = Result<Option<Bytes>, Self::Error>> + Send {
         async move {
-            // Note: this is mostly used to fetch pooled transactions so we check the pool first.
-            // Suppress the pooled copy of a retained-private tx so its raw bytes don't leak before
-            // inclusion; once mined, the provider lookup below still returns it.
-            let private_in_pool = self.credible_config().hide_private_pool_txs() &&
-                self.pool().get(&hash).is_some_and(|tx| tx.origin.is_private());
-            if let Some(tx) = self
-                .pool()
-                .get_pooled_transaction_element(hash)
-                .filter(|_| !private_in_pool)
-                .map(|tx| tx.encoded_2718().into())
-            {
-                return Ok(Some(tx))
+            // Check the pool first. Gate the raw-byte fetch on the entry's own origin so a
+            // retained-private tx can't leak its bytes before inclusion.
+            if let Some(pool_tx) = self.pool().get(&hash) {
+                let hide_private =
+                    self.credible_config().hide_private_pool_txs() && pool_tx.origin.is_private();
+                if !hide_private &&
+                    let Some(tx) = self
+                        .pool()
+                        .get_pooled_transaction_element(hash)
+                        .map(|tx| tx.encoded_2718().into())
+                {
+                    return Ok(Some(tx))
+                }
             }
 
             self.spawn_blocking_io(move |ref this| {
