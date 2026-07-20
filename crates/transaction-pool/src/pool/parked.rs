@@ -143,7 +143,8 @@ impl<T: ParkedOrd> ParkedPool<T> {
         // keep track of size
         self.size_of -= tx.transaction.size();
         if tx.transaction.origin.is_private() {
-            self.private_pool_count -= 1;
+            debug_assert!(self.private_pool_count > 0, "private_pool_count underflow");
+            self.private_pool_count = self.private_pool_count.saturating_sub(1);
         }
 
         Some(tx.transaction.into())
