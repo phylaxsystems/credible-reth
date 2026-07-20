@@ -58,7 +58,10 @@ impl CredibleRpcConfig {
 
     /// Whether retained-private transactions must be hidden from public pool-reading RPCs.
     ///
-    /// Enabled exactly when the node retains forwarded transactions as private.
+    /// Enabled exactly when the node retains forwarded transactions as private. Callers hide every
+    /// `Private`-origin pool transaction, which is exact here because
+    /// [`Self::resolve_forwarded_origin`] is the only path that assigns `Private` origin on
+    /// this node.
     pub const fn hide_private_pool_txs(&self) -> bool {
         self.retain_forwarded_txs_as_private
     }
