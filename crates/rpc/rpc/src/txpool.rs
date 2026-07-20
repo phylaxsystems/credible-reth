@@ -101,7 +101,7 @@ where
         // Read totals and private counts from a single snapshot: reading them separately lets a tx
         // moving between sub-pools leave a private tx in the public count under retention.
         let ((pending, queued), (private_pending, private_queued)) =
-            self.pool.pending_and_queued_txn_count_with_private();
+            self.pool.total_and_private_txn_counts();
         // With Credible Layer retention, exclude private-origin txs from the public counts.
         if self.credible_config.hide_private_pool_txs() {
             return Ok(TxpoolStatus {
