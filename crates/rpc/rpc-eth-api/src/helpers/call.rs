@@ -136,14 +136,9 @@ pub trait EthCall: EstimateCall + Call + LoadPendingBlock + LoadBlock + FullEthA
                     // (block 0) slot.
                     let state_overrides =
                         match credible_block_number_override(block_overrides.as_ref()) {
-                            Some(target_number) => {
-                                this.credible_config()
-                                    .apply_credible_block_override(
-                                        target_number,
-                                        EvmOverrides::state(state_overrides),
-                                    )
-                                    .state
-                            }
+                            Some(target_number) => this
+                                .credible_config()
+                                .apply_credible_block_override(target_number, state_overrides),
                             None => state_overrides,
                         };
 
@@ -376,10 +371,6 @@ pub trait EthCall: EstimateCall + Call + LoadPendingBlock + LoadBlock + FullEthA
                     }
                 }
 
-                // Block number each bundle executes at (its own `block_override.number`, or the
-                // target block) — this drives the credible marker slot, just like a single call.
-                let base_block_number = evm_env.block_env.number();
-
                 // transact all bundles
                 for (bundle_index, bundle) in bundles.into_iter().enumerate() {
                     let Bundle { transactions, block_override } = bundle;
@@ -390,26 +381,13 @@ pub trait EthCall: EstimateCall + Call + LoadPendingBlock + LoadBlock + FullEthA
 
                     let mut bundle_results = Vec::with_capacity(transactions.len());
                     let block_overrides = block_override.map(Box::new);
-                    let bundle_block_number =
-                        credible_block_number_override(block_overrides.as_deref())
-                            .unwrap_or(base_block_number);
 
                     // transact all transactions in the bundle
                     for (tx_index, tx) in transactions.into_iter().enumerate() {
-                        // State overrides apply only on the first tx of each bundle; inject the
-                        // credible marker per bundle for that bundle's block (no-op with no
-                        // registry).
-                        let state = if tx_index == 0 {
-                            this.credible_config()
-                                .apply_credible_block_override(
-                                    bundle_block_number,
-                                    EvmOverrides::state(state_override.take()),
-                                )
-                                .state
-                        } else {
-                            None
-                        };
-                        let overrides = EvmOverrides::new(state, block_overrides.clone());
+                        // Apply overrides, state overrides are only applied for the first tx in the
+                        // request
+                        let overrides =
+                            EvmOverrides::new(state_override.take(), block_overrides.clone());
 
                         let (current_evm_env, prepared_tx) = this
                             .prepare_call_env(evm_env.clone(), tx, &mut db, overrides)
@@ -495,6 +473,11 @@ pub trait EthCall: EstimateCall + Call + LoadPendingBlock + LoadBlock + FullEthA
             let state = this.state_at_block_id(at).await?;
             let mut db = State::builder().with_database(StateProviderDatabase::new(state)).build();
 
+            // Inject the credible Layer marker for the block the EVM will execute at. No-op unless
+            // a registry is configured.
+            let state_override = this
+                .credible_config()
+                .apply_credible_block_override(evm_env.block_env.number(), state_override);
             if let Some(state_overrides) = state_override {
                 apply_state_overrides(state_overrides, &mut db)
                     .map_err(Self::Error::from_eth_err)?;
@@ -928,7 +911,13 @@ pub trait Call:
         if let Some(block_overrides) = overrides.block {
             apply_block_overrides(*block_overrides, db, evm_env.block_env.inner_mut());
         }
-        if let Some(state_overrides) = overrides.state {
+        // Inject the credible Layer marker for the block the EVM will execute at (after any block
+        // override is applied), so the marker slot and the execution resolve the same block. No-op
+        // unless a registry is configured.
+        let state_overrides = self
+            .credible_config()
+            .apply_credible_block_override(evm_env.block_env.number(), overrides.state);
+        if let Some(state_overrides) = state_overrides {
             apply_state_overrides(state_overrides, db)
                 .map_err(EthApiError::from_state_overrides_err)?;
         }

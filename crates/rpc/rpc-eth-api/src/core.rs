@@ -2,7 +2,7 @@
 //! the `eth_` namespace.
 use crate::{
     helpers::{EthApiSpec, EthBlocks, EthCall, EthFees, EthState, EthTransactions, FullEthApi},
-    FromEthApiError, RpcBlock, RpcHeader, RpcReceipt, RpcTransaction,
+    RpcBlock, RpcHeader, RpcReceipt, RpcTransaction,
 };
 use alloy_dyn_abi::TypedData;
 use alloy_eips::{eip2930::AccessListResult, BlockId, BlockNumberOrTag};
@@ -18,11 +18,8 @@ use alloy_serde::JsonStorageKey;
 use jsonrpsee::{core::RpcResult, proc_macros::rpc};
 use reth_primitives_traits::TxTy;
 use reth_rpc_convert::RpcTxReq;
-use reth_rpc_eth_types::{
-    credible::credible_block_number_override, EthApiError, EthCapabilities, FillTransaction,
-};
+use reth_rpc_eth_types::{EthApiError, EthCapabilities, FillTransaction};
 use reth_rpc_server_types::{result::internal_rpc_err, ToRpcResult};
-use reth_storage_api::BlockIdReader;
 use serde_json::Value;
 use std::collections::HashMap;
 use tracing::trace;
@@ -765,10 +762,13 @@ where
         block_overrides: Option<Box<BlockOverrides>>,
     ) -> RpcResult<Bytes> {
         trace!(target: "rpc::eth", ?request, ?block_number, ?state_overrides, ?block_overrides, "Serving eth_call");
-        let at = block_number.unwrap_or_default();
-        let (at, overrides) =
-            credible_call_overrides(self, at, EvmOverrides::new(state_overrides, block_overrides))?;
-        Ok(EthCall::call(self, request, Some(at), overrides).await?)
+        Ok(EthCall::call(
+            self,
+            request,
+            block_number,
+            EvmOverrides::new(state_overrides, block_overrides),
+        )
+        .await?)
     }
 
     /// Handler for: `eth_fillTransaction`
@@ -799,12 +799,7 @@ where
         state_override: Option<StateOverride>,
     ) -> RpcResult<AccessListResult> {
         trace!(target: "rpc::eth", ?request, ?block_number, ?state_override, "Serving eth_createAccessList");
-        let at = block_number.unwrap_or_default();
-        // createAccessList takes no block overrides, so the credible marker derives from the
-        // request's block tag. The override is a registry state-diff, so it rides on `state`.
-        let (at, overrides) =
-            credible_call_overrides(self, at, EvmOverrides::new(state_override, None))?;
-        Ok(EthCall::create_access_list_at(self, request, Some(at), overrides.state).await?)
+        Ok(EthCall::create_access_list_at(self, request, block_number, state_override).await?)
     }
 
     /// Handler for: `eth_estimateGas`
@@ -816,10 +811,13 @@ where
         block_overrides: Option<Box<BlockOverrides>>,
     ) -> RpcResult<U256> {
         trace!(target: "rpc::eth", ?request, ?block_number, "Serving eth_estimateGas");
-        let at = block_number.unwrap_or_default();
-        let (at, overrides) =
-            credible_call_overrides(self, at, EvmOverrides::new(state_override, block_overrides))?;
-        Ok(EthCall::estimate_gas_at(self, request, at, overrides).await?)
+        Ok(EthCall::estimate_gas_at(
+            self,
+            request,
+            block_number.unwrap_or_default(),
+            EvmOverrides::new(state_override, block_overrides),
+        )
+        .await?)
     }
 
     /// Handler for: `eth_gasPrice`
@@ -1008,67 +1006,4 @@ where
 
         Ok(self.get_raw_block_access_list(block).await?)
     }
-}
-
-/// Applies the credible block override and pins the block the call executes at, so the marker and
-/// the EVM call resolve the same block even if the tip advances mid-request. A no-op returning
-/// `at` unchanged when no registry is configured. Only moving tags (`latest`, `safe`, `finalized`)
-/// are pinned; an exact hash or number, `pending`, and an explicit `block_overrides.number` are
-/// left unchanged.
-///
-/// An exact block hash is deliberately not pinned to a number: that would drop reorg safety, since
-/// a non-canonical or reorged hash could otherwise resolve to a different block at the same height.
-///
-/// `pending` has no stable block identifier: it is resolved as `latest + 1`, so a tip advance can
-/// make the marker target the previous pending height.
-fn credible_call_overrides<T: FullEthApi>(
-    eth_api: &T,
-    at: BlockId,
-    overrides: EvmOverrides,
-) -> Result<(BlockId, EvmOverrides), T::Error> {
-    let credible_config = eth_api.credible_config();
-    if credible_config.registry_address.is_none() {
-        return Ok((at, overrides));
-    }
-
-    let credible_block_number =
-        resolve_credible_block_number(eth_api, at, overrides.block.as_deref())?;
-    let pin_block = matches!(
-        at,
-        BlockId::Number(
-            BlockNumberOrTag::Latest | BlockNumberOrTag::Safe | BlockNumberOrTag::Finalized
-        )
-    ) && credible_block_number_override(overrides.block.as_deref()).is_none();
-    let overrides = credible_config.apply_credible_block_override(credible_block_number, overrides);
-    // A pinned block is a committed provider block number, so it always fits `u64`.
-    let at =
-        if pin_block { BlockId::from(credible_block_number.saturating_to::<u64>()) } else { at };
-
-    Ok((at, overrides))
-}
-
-/// Resolves the block number the EVM will actually see, for deriving the credible block
-/// override. Prefers `block_overrides.number` when set; otherwise resolves `at`, erroring
-/// instead of silently defaulting to block `0` if it can't be resolved.
-///
-/// The provider only resolves committed blocks, so `at.is_pending()` can't be looked up
-/// directly; a pending call/estimate executes as if mined on top of the current chain tip,
-/// so that case resolves the latest block instead and adds one.
-fn resolve_credible_block_number<T: FullEthApi>(
-    eth_api: &T,
-    at: BlockId,
-    block_overrides: Option<&BlockOverrides>,
-) -> Result<U256, T::Error> {
-    if let Some(number) = credible_block_number_override(block_overrides) {
-        return Ok(number);
-    }
-
-    let is_pending = at.is_pending();
-    let number = eth_api
-        .provider()
-        .block_number_for_id(if is_pending { BlockId::latest() } else { at })
-        .map_err(T::Error::from_eth_err)?
-        .ok_or_else(|| T::Error::from_eth_err(EthApiError::HeaderNotFound(at)))?;
-
-    Ok(U256::from(if is_pending { number.saturating_add(1) } else { number }))
 }

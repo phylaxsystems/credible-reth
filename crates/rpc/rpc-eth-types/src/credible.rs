@@ -1,7 +1,7 @@
 //! Credible Layer RPC integration hooks.
 
 use alloy_primitives::{keccak256, Address, B256, U256};
-use alloy_rpc_types_eth::{state::EvmOverrides, BlockOverrides};
+use alloy_rpc_types_eth::{state::StateOverride, BlockOverrides};
 use alloy_sol_types::SolValue;
 use reth_transaction_pool::TransactionOrigin;
 use serde::{Deserialize, Serialize};
@@ -23,24 +23,25 @@ pub struct CredibleRpcConfig {
 }
 
 impl CredibleRpcConfig {
-    /// Applies the credible block override for a call simulated against `block_number` to
-    /// call-like EVM overrides.
+    /// Merges the credible block marker for a call simulated against `block_number` into the
+    /// call's state overrides.
     ///
-    /// A no-op if no registry is configured. Registry-backed resolution is a pure hash
-    /// computation — no call into the registry contract, no EVM execution, no async lookup.
+    /// A no-op returning `state` unchanged if no registry is configured. Registry-backed
+    /// resolution is a pure hash computation — no call into the registry contract, no EVM
+    /// execution, no async lookup.
     pub fn apply_credible_block_override(
         &self,
         block_number: U256,
-        overrides: EvmOverrides,
-    ) -> EvmOverrides {
-        let Some(registry) = self.registry_address else { return overrides };
+        state: Option<StateOverride>,
+    ) -> Option<StateOverride> {
+        let Some(registry) = self.registry_address else { return state };
 
         let block_override = CredibleBlockOverride {
             address: registry,
             slot: credible_block_slot(block_number, U256::from(DEFAULT_CREDIBLE_BLOCKS_BASE_SLOT)),
             value: B256::with_last_byte(1),
         };
-        block_override.apply_to(overrides)
+        block_override.apply_to(state)
     }
 
     /// Returns the origin a successfully forwarded transaction should be retained under.
@@ -92,25 +93,25 @@ struct CredibleBlockOverride {
 }
 
 impl CredibleBlockOverride {
-    /// Merges this override into existing EVM overrides.
-    fn apply_to(self, mut overrides: EvmOverrides) -> EvmOverrides {
-        let state = overrides.state.get_or_insert_with(Default::default);
+    /// Merges this override into the call's state overrides.
+    fn apply_to(self, state: Option<StateOverride>) -> Option<StateOverride> {
+        let mut state = state.unwrap_or_default();
         let account = state.entry(self.address).or_default();
 
-        if let Some(state) = account.state.as_mut() {
-            state.insert(self.slot, self.value);
+        if let Some(slots) = account.state.as_mut() {
+            slots.insert(self.slot, self.value);
         } else {
             account.state_diff.get_or_insert_with(Default::default).insert(self.slot, self.value);
         }
 
-        overrides
+        Some(state)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloy_rpc_types_eth::state::{AccountOverride, StateOverride};
+    use alloy_rpc_types_eth::state::AccountOverride;
 
     #[test]
     fn credible_block_override_adds_state_diff() {
@@ -119,8 +120,7 @@ mod tests {
         let value = B256::repeat_byte(0x33);
         let block_override = CredibleBlockOverride { address, slot, value };
 
-        let overrides = block_override.apply_to(EvmOverrides::default());
-        let state = overrides.state.expect("override should add state overrides");
+        let state = block_override.apply_to(None).expect("override should add state overrides");
         let account = state.get(&address).expect("override account should be present");
 
         assert_eq!(account.state, None);
@@ -146,8 +146,9 @@ mod tests {
 
         let block_override =
             CredibleBlockOverride { address, slot: override_slot, value: override_value };
-        let overrides = block_override.apply_to(EvmOverrides::state(Some(state_override)));
-        let state = overrides.state.expect("override should keep state overrides");
+        let state = block_override
+            .apply_to(Some(state_override))
+            .expect("override should keep state overrides");
         let account = state.get(&address).expect("override account should be present");
         let state = account.state.as_ref().expect("full state override should be preserved");
 
@@ -168,9 +169,8 @@ mod tests {
     #[test]
     fn no_override_without_registry() {
         let config = CredibleRpcConfig::default();
-        let overrides =
-            config.apply_credible_block_override(U256::from(100), EvmOverrides::default());
-        assert_eq!(overrides.state, None);
+        let state = config.apply_credible_block_override(U256::from(100), None);
+        assert_eq!(state, None);
     }
 
     #[test]
@@ -178,9 +178,9 @@ mod tests {
         let registry = Address::repeat_byte(0xaa);
         let config = CredibleRpcConfig { registry_address: Some(registry), ..Default::default() };
 
-        let overrides =
-            config.apply_credible_block_override(U256::from(12345), EvmOverrides::default());
-        let state = overrides.state.expect("registry override should add state overrides");
+        let state = config
+            .apply_credible_block_override(U256::from(12345), None)
+            .expect("registry override should add state overrides");
         let account = state.get(&registry).expect("registry account should be present");
         let expected_slot: B256 =
             "0x24689f9b6ba9bad3c49d2b1293bf33fa38d0c418c093b2b4bc23f5d18e11355e".parse().unwrap();
@@ -216,8 +216,9 @@ mod tests {
         let number = credible_block_number_override(Some(&bundle)).unwrap_or(base_block);
         assert_eq!(number, U256::from(250));
 
-        let overrides = config.apply_credible_block_override(number, EvmOverrides::default());
-        let state = overrides.state.expect("registry override should add state overrides");
+        let state = config
+            .apply_credible_block_override(number, None)
+            .expect("registry override should add state overrides");
         let account = state.get(&registry).expect("registry account should be present");
         let expected_slot = credible_block_slot(U256::from(250), U256::from(1));
         assert_eq!(
