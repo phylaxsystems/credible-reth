@@ -43,6 +43,11 @@ pub struct PendingPool<T: TransactionOrdering> {
     ///
     /// See also [`reth_primitives_traits::InMemorySize::size`].
     size_of: SizeTracker,
+    /// Running count of [`crate::TransactionOrigin::Private`] transactions in the pool.
+    ///
+    /// Maintained alongside `size_of` so callers can read the private count without walking the
+    /// pool. See [`Self::private_pool_count()`].
+    private_pool_count: usize,
     /// Used to broadcast new transactions that have been added to the `PendingPool` to existing
     /// `static_files` of this pool.
     new_transaction_notifier: broadcast::Sender<PendingTransaction<T>>,
@@ -66,6 +71,7 @@ impl<T: TransactionOrdering> PendingPool<T> {
             independent_transactions: Default::default(),
             highest_nonces: Default::default(),
             size_of: Default::default(),
+            private_pool_count: 0,
             new_transaction_notifier,
         }
     }
@@ -80,6 +86,7 @@ impl<T: TransactionOrdering> PendingPool<T> {
         self.independent_transactions.clear();
         self.highest_nonces.clear();
         self.size_of.reset();
+        self.private_pool_count = 0;
         std::mem::take(&mut self.by_id)
     }
 
@@ -194,6 +201,9 @@ impl<T: TransactionOrdering> PendingPool<T> {
                 }
             } else {
                 self.size_of += tx.transaction.size();
+                if tx.transaction.origin.is_private() {
+                    self.private_pool_count += 1;
+                }
                 self.update_independents_and_highest_nonces(&tx);
                 self.by_id.insert(id, tx);
             }
@@ -239,6 +249,9 @@ impl<T: TransactionOrdering> PendingPool<T> {
                 tx.priority = self.ordering.priority(&tx.transaction.transaction, base_fee);
 
                 self.size_of += tx.transaction.size();
+                if tx.transaction.origin.is_private() {
+                    self.private_pool_count += 1;
+                }
                 self.update_independents_and_highest_nonces(&tx);
                 self.by_id.insert(id, tx);
             }
@@ -290,6 +303,9 @@ impl<T: TransactionOrdering> PendingPool<T> {
 
         // keep track of size
         self.size_of += tx.size();
+        if tx.origin.is_private() {
+            self.private_pool_count += 1;
+        }
 
         let tx_id = *tx.id();
 
@@ -327,6 +343,9 @@ impl<T: TransactionOrdering> PendingPool<T> {
 
         let tx = self.by_id.remove(id)?;
         self.size_of -= tx.transaction.size();
+        if tx.transaction.origin.is_private() {
+            self.private_pool_count -= 1;
+        }
 
         match self.highest_nonces.entry(id.sender) {
             Entry::Occupied(mut entry) => {
@@ -538,6 +557,11 @@ impl<T: TransactionOrdering> PendingPool<T> {
     /// Number of transactions in the entire pool
     pub(crate) fn len(&self) -> usize {
         self.by_id.len()
+    }
+
+    /// Number of [`crate::TransactionOrigin::Private`] transactions in the pool.
+    pub(crate) const fn private_pool_count(&self) -> usize {
+        self.private_pool_count
     }
 
     /// All transactions grouped by id

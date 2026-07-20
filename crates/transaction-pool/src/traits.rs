@@ -450,6 +450,15 @@ pub trait TransactionPool: Clone + Debug + Send + Sync {
     /// number of transactions that are ready for inclusion in future blocks: `(pending, queued)`.
     fn pending_and_queued_txn_count(&self) -> (usize, usize);
 
+    /// Returns the number of [`TransactionOrigin::Private`] transactions.
+    ///
+    /// Lets callers exclude private transactions from the pool counts without materializing the
+    /// pool. Defaults to `(0, 0)`; pool implementations that hold private transactions should
+    /// override this.
+    fn private_pending_and_queued_txn_count(&self) -> (usize, usize) {
+        (0, 0)
+    }
+
     /// Returns all transactions that are currently in the pool grouped by whether they are ready
     /// for inclusion in the next block or not.
     ///
