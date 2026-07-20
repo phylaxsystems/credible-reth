@@ -12,6 +12,7 @@ use reth_primitives_traits::NodePrimitives;
 use reth_rpc_api::TxPoolApiServer;
 use reth_rpc_convert::{RpcConvert, RpcTypes};
 use reth_rpc_eth_api::RpcTransaction;
+use reth_rpc_eth_types::CredibleRpcConfig;
 use reth_transaction_pool::{
     AllPoolTransactions, PoolConsensusTx, PoolTransaction, TransactionPool,
 };
@@ -25,12 +26,13 @@ pub struct TxPoolApi<Pool, Eth> {
     /// An interface to interact with the pool
     pool: Pool,
     converter: Eth,
+    credible_config: CredibleRpcConfig,
 }
 
 impl<Pool, Eth> TxPoolApi<Pool, Eth> {
     /// Creates a new instance of `TxpoolApi`.
-    pub const fn new(pool: Pool, converter: Eth) -> Self {
-        Self { pool, converter }
+    pub const fn new(pool: Pool, converter: Eth, credible_config: CredibleRpcConfig) -> Self {
+        Self { pool, converter, credible_config }
     }
 }
 
@@ -61,13 +63,21 @@ where
             Ok(())
         }
 
+        // With Credible Layer retention, private-origin pool txs must not leak before inclusion.
+        let hide_private = self.credible_config.hide_private_pool_txs();
         let AllPoolTransactions { pending, queued } = self.pool.all_transactions();
 
         let mut content = TxpoolContent::default();
         for pending in pending {
+            if hide_private && pending.origin.is_private() {
+                continue;
+            }
             insert::<_, Eth>(&pending.transaction, &mut content.pending, &self.converter)?;
         }
         for queued in queued {
+            if hide_private && queued.origin.is_private() {
+                continue;
+            }
             insert::<_, Eth>(&queued.transaction, &mut content.queued, &self.converter)?;
         }
 
@@ -88,6 +98,13 @@ where
     /// Handler for `txpool_status`
     async fn txpool_status(&self) -> RpcResult<TxpoolStatus> {
         trace!(target: "rpc::eth", "Serving txpool_status");
+        // With Credible Layer retention, exclude private-origin txs from the public counts.
+        if self.credible_config.hide_private_pool_txs() {
+            let AllPoolTransactions { pending, queued } = self.pool.all_transactions();
+            let pending = pending.iter().filter(|tx| !tx.origin.is_private()).count();
+            let queued = queued.iter().filter(|tx| !tx.origin.is_private()).count();
+            return Ok(TxpoolStatus { pending: pending as u64, queued: queued as u64 });
+        }
         let (pending, queued) = self.pool.pending_and_queued_txn_count();
         Ok(TxpoolStatus { pending: pending as u64, queued: queued as u64 })
     }
@@ -111,17 +128,25 @@ where
             entry.insert(tx.nonce().to_string(), tx.into_inner().into());
         }
 
+        // With Credible Layer retention, private-origin pool txs must not leak before inclusion.
+        let hide_private = self.credible_config.hide_private_pool_txs();
         let AllPoolTransactions { pending, queued } = self.pool.all_transactions();
 
         Ok(TxpoolInspect {
-            pending: pending.iter().fold(Default::default(), |mut acc, tx| {
-                insert(&tx.transaction, &mut acc);
-                acc
-            }),
-            queued: queued.iter().fold(Default::default(), |mut acc, tx| {
-                insert(&tx.transaction, &mut acc);
-                acc
-            }),
+            pending: pending.iter().filter(|tx| !hide_private || !tx.origin.is_private()).fold(
+                Default::default(),
+                |mut acc, tx| {
+                    insert(&tx.transaction, &mut acc);
+                    acc
+                },
+            ),
+            queued: queued.iter().filter(|tx| !hide_private || !tx.origin.is_private()).fold(
+                Default::default(),
+                |mut acc, tx| {
+                    insert(&tx.transaction, &mut acc);
+                    acc
+                },
+            ),
         })
     }
 
