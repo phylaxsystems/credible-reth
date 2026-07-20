@@ -583,24 +583,28 @@ mod tests {
     use crate::{eth::helpers::types::EthRpcConverter, EthApi, EthApiBuilder};
     use alloy_consensus::{Block, BlockBody, Header};
     use alloy_eips::BlockNumberOrTag;
-    use alloy_primitives::{Signature, B256, U64};
+    use alloy_primitives::{Address, Bytes, Signature, TxKind, B256, U256, U64};
     use alloy_rpc_types::FeeHistory;
-    use alloy_rpc_types_eth::{Bundle, TransactionRequest};
+    use alloy_rpc_types_eth::{BlockOverrides, Bundle, TransactionRequest};
     use jsonrpsee_types::error::INVALID_PARAMS_CODE;
     use rand::Rng;
     use reth_chain_state::CanonStateSubscriptions;
-    use reth_chainspec::{ChainSpec, ChainSpecProvider, EthChainSpec};
+    use reth_chainspec::{ChainSpec, ChainSpecProvider, EthChainSpec, DEV};
     use reth_ethereum_primitives::TransactionSigned;
     use reth_evm_ethereum::EthEvmConfig;
     use reth_network_api::noop::NoopNetwork;
     use reth_provider::{
-        test_utils::{MockEthProvider, NoopProvider},
+        test_utils::{ExtendedAccount, MockEthProvider, NoopProvider},
         PruneCheckpointReader, StageCheckpointReader,
     };
     use reth_rpc_eth_api::{node::RpcNodeCoreAdapter, EthApiServer};
+    use reth_rpc_eth_types::CredibleRpcConfig;
     use reth_storage_api::{BalProvider, BlockReader, BlockReaderIdExt, StateProviderFactory};
     use reth_testing_utils::generators;
     use reth_transaction_pool::test_utils::{testing_pool, TestPool};
+    use revm::bytecode::opcode::{
+        JUMPDEST, JUMPI, KECCAK256, MSTORE, NUMBER, PUSH1, RETURN, REVERT, SLOAD,
+    };
 
     type FakeEthApi<P = MockEthProvider> = EthApi<
         RpcNodeCoreAdapter<P, TestPool, NoopNetwork, EthEvmConfig>,
@@ -926,5 +930,193 @@ mod tests {
             fee_history.reward.is_none(),
             "all: no percentiles were requested, so there should be no rewards result"
         );
+    }
+
+    // Returns `_credibleBlocks[block.number]` (slot = keccak256(abi.encode(block.number, 1))).
+    fn credible_readback_bytecode() -> Bytes {
+        Bytes::from(vec![
+            NUMBER, PUSH1, 0x00, MSTORE, PUSH1, 0x01, PUSH1, 0x20, MSTORE, PUSH1, 0x40, PUSH1,
+            0x00, KECCAK256, // slot = keccak256(mem[0x00..0x40])
+            SLOAD, PUSH1, 0x00, MSTORE, PUSH1, 0x20, PUSH1, 0x00, RETURN,
+        ])
+    }
+
+    // Reverts unless the marker slot is set; for methods whose output isn't the slot value.
+    fn credible_revert_unless_marker_bytecode() -> Bytes {
+        Bytes::from(vec![
+            NUMBER, PUSH1, 0x00, MSTORE, PUSH1, 0x01, PUSH1, 0x20, MSTORE, PUSH1, 0x40, PUSH1,
+            0x00, KECCAK256, SLOAD, PUSH1, 0x17,
+            JUMPI, // marker set -> jump to the JUMPDEST at byte 0x17
+            PUSH1, 0x00, PUSH1, 0x00, REVERT, JUMPDEST, PUSH1, 0x00, PUSH1, 0x00, RETURN,
+        ])
+    }
+
+    /// Provider seeded with a single block whose `registry` account runs `bytecode`.
+    fn credible_mock_provider(registry: Address, bytecode: Bytes) -> MockEthProvider {
+        // DEV enables all forks (typed txs for createAccessList); Cancun needs the blob fields.
+        let provider = MockEthProvider::default().with_chain_spec((**DEV).clone());
+        let hash = B256::repeat_byte(0xbb);
+        let header = Header {
+            number: 1,
+            gas_limit: 30_000_000,
+            excess_blob_gas: Some(0),
+            blob_gas_used: Some(0),
+            parent_beacon_block_root: Some(B256::ZERO),
+            ..Default::default()
+        };
+        provider.add_block(hash, Block { header: header.clone(), body: Default::default() });
+        provider.add_header(hash, header);
+        provider.add_account(registry, ExtendedAccount::new(0, U256::ZERO).with_bytecode(bytecode));
+        provider
+    }
+
+    /// Builds an `EthApi`, enabling the credible registry override when `registry` is set.
+    fn build_credible_eth_api(provider: MockEthProvider, registry: Option<Address>) -> FakeEthApi {
+        let builder = EthApiBuilder::new(
+            provider.clone(),
+            testing_pool(),
+            NoopNetwork::default(),
+            EthEvmConfig::new(provider.chain_spec()),
+        );
+        match registry {
+            Some(registry_address) => builder
+                .credible_config(CredibleRpcConfig {
+                    registry_address: Some(registry_address),
+                    ..Default::default()
+                })
+                .build(),
+            None => builder.build(),
+        }
+    }
+
+    /// A call request targeting the registry contract.
+    fn credible_call_request(registry: Address) -> TransactionRequest {
+        TransactionRequest { to: Some(TxKind::Call(registry)), ..Default::default() }
+    }
+
+    /// A 32-byte value with `byte` in the last position, as returned by the readback contract.
+    fn u256_bytes(byte: u8) -> Bytes {
+        Bytes::from(B256::with_last_byte(byte))
+    }
+
+    // eth_call: disabled-config parity, explicit number, and block-number override.
+    #[tokio::test]
+    async fn credible_marker_readback_via_eth_call() {
+        let registry = Address::repeat_byte(0xcc);
+        let provider = credible_mock_provider(registry, credible_readback_bytecode());
+        let request = credible_call_request(registry);
+
+        // Disabled config: marker absent, slot reads 0.
+        let eth_api = build_credible_eth_api(provider.clone(), None);
+        let out = <EthApi<_, _> as EthApiServer<_, _, _, _, _, _>>::call(
+            &eth_api,
+            request.clone(),
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(out, u256_bytes(0));
+
+        // Registry configured: marker injected at latest and at an explicit number.
+        let eth_api = build_credible_eth_api(provider, Some(registry));
+        for block in [None, Some(BlockNumberOrTag::Number(1).into())] {
+            let out = <EthApi<_, _> as EthApiServer<_, _, _, _, _, _>>::call(
+                &eth_api,
+                request.clone(),
+                block,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+            assert_eq!(out, u256_bytes(1));
+        }
+
+        // A block-number override selects the slot for the overridden block.
+        let overrides = BlockOverrides { number: Some(U256::from(1)), ..Default::default() };
+        let out = <EthApi<_, _> as EthApiServer<_, _, _, _, _, _>>::call(
+            &eth_api,
+            request,
+            None,
+            None,
+            Some(Box::new(overrides)),
+        )
+        .await
+        .unwrap();
+        assert_eq!(out, u256_bytes(1));
+    }
+
+    // eth_call `pending`: marker derives from the resolved env (latest + 1).
+    #[tokio::test]
+    async fn credible_marker_readback_via_eth_call_pending() {
+        let registry = Address::repeat_byte(0xcc);
+        let provider = credible_mock_provider(registry, credible_readback_bytecode());
+        let eth_api = build_credible_eth_api(provider, Some(registry));
+
+        let out = <EthApi<_, _> as EthApiServer<_, _, _, _, _, _>>::call(
+            &eth_api,
+            credible_call_request(registry),
+            Some(BlockNumberOrTag::Pending.into()),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(out, u256_bytes(1));
+    }
+
+    // eth_estimateGas reaches the marker (reverting probe only succeeds when set).
+    #[tokio::test]
+    async fn credible_marker_reaches_estimate_gas() {
+        let registry = Address::repeat_byte(0xcc);
+        let provider = credible_mock_provider(registry, credible_revert_unless_marker_bytecode());
+        let request = credible_call_request(registry);
+
+        let disabled = build_credible_eth_api(provider.clone(), None);
+        assert!(<EthApi<_, _> as EthApiServer<_, _, _, _, _, _>>::estimate_gas(
+            &disabled,
+            request.clone(),
+            None,
+            None,
+            None,
+        )
+        .await
+        .is_err());
+
+        let enabled = build_credible_eth_api(provider, Some(registry));
+        assert!(<EthApi<_, _> as EthApiServer<_, _, _, _, _, _>>::estimate_gas(
+            &enabled, request, None, None, None,
+        )
+        .await
+        .is_ok());
+    }
+
+    // eth_createAccessList reaches the marker.
+    #[tokio::test]
+    async fn credible_marker_reaches_create_access_list() {
+        let registry = Address::repeat_byte(0xcc);
+        let provider = credible_mock_provider(registry, credible_revert_unless_marker_bytecode());
+        let request = credible_call_request(registry);
+
+        let disabled = build_credible_eth_api(provider.clone(), None);
+        let res = <EthApi<_, _> as EthApiServer<_, _, _, _, _, _>>::create_access_list(
+            &disabled,
+            request.clone(),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(res.error.is_some());
+
+        let enabled = build_credible_eth_api(provider, Some(registry));
+        let res = <EthApi<_, _> as EthApiServer<_, _, _, _, _, _>>::create_access_list(
+            &enabled, request, None, None,
+        )
+        .await
+        .unwrap();
+        assert!(res.error.is_none());
     }
 }
