@@ -98,11 +98,12 @@ where
     /// Handler for `txpool_status`
     async fn txpool_status(&self) -> RpcResult<TxpoolStatus> {
         trace!(target: "rpc::eth", "Serving txpool_status");
-        let (pending, queued) = self.pool.pending_and_queued_txn_count();
+        // Read totals and private counts from a single snapshot: reading them separately lets a tx
+        // moving between sub-pools leave a private tx in the public count under retention.
+        let ((pending, queued), (private_pending, private_queued)) =
+            self.pool.pending_and_queued_txn_count_with_private();
         // With Credible Layer retention, exclude private-origin txs from the public counts.
         if self.credible_config.hide_private_pool_txs() {
-            let (private_pending, private_queued) =
-                self.pool.private_pending_and_queued_txn_count();
             return Ok(TxpoolStatus {
                 pending: pending.saturating_sub(private_pending) as u64,
                 queued: queued.saturating_sub(private_queued) as u64,
