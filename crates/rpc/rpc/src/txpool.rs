@@ -98,14 +98,16 @@ where
     /// Handler for `txpool_status`
     async fn txpool_status(&self) -> RpcResult<TxpoolStatus> {
         trace!(target: "rpc::eth", "Serving txpool_status");
+        let (pending, queued) = self.pool.pending_and_queued_txn_count();
         // With Credible Layer retention, exclude private-origin txs from the public counts.
         if self.credible_config.hide_private_pool_txs() {
-            let AllPoolTransactions { pending, queued } = self.pool.all_transactions();
-            let pending = pending.iter().filter(|tx| !tx.origin.is_private()).count();
-            let queued = queued.iter().filter(|tx| !tx.origin.is_private()).count();
-            return Ok(TxpoolStatus { pending: pending as u64, queued: queued as u64 });
+            let (private_pending, private_queued) =
+                self.pool.private_pending_and_queued_txn_count();
+            return Ok(TxpoolStatus {
+                pending: pending.saturating_sub(private_pending) as u64,
+                queued: queued.saturating_sub(private_queued) as u64,
+            });
         }
-        let (pending, queued) = self.pool.pending_and_queued_txn_count();
         Ok(TxpoolStatus { pending: pending as u64, queued: queued as u64 })
     }
 
