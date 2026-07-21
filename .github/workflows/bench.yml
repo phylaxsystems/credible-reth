@@ -178,7 +178,8 @@ jobs:
         with:
           github-token: ${{ secrets.DEREK_BENCH_ACK_TOKEN }}
           script: |
-            const org = 'paradigmxyz';
+            const org = context.repo.owner;
+            const trustedRepository = `${context.repo.owner}/${context.repo.repo}`;
             const checkMembership = async (username) => {
               try {
                 const { status } = await github.rest.orgs.checkMembershipForUser({ org, username });
@@ -199,6 +200,10 @@ jobs:
               repo: context.repo.repo,
               pull_number: context.issue.number,
             });
+            if (pr.head.repo.full_name !== trustedRepository) {
+              core.setFailed(`Refusing to run fork PR code from ${pr.head.repo.full_name} on a self-hosted runner`);
+              return;
+            }
             const prAuthor = pr.user.login;
             if (!await checkMembership(prAuthor)) {
               core.setFailed(`PR author @${prAuthor} is not a member of ${org}`);
@@ -321,6 +326,17 @@ jobs:
               var baselineNodeArgs = '${{ github.event.inputs.baseline_args }}' || '';
               var featureNodeArgs = '${{ github.event.inputs.feature_args }}' || '';
               var skipStateRoot = 'false';
+
+              const unsafeRef = (ref) => {
+                const value = String(ref || '');
+                return /^(refs\/)?pull\//.test(value) || /^[0-9a-f]{40}$/i.test(value);
+              };
+              for (const [name, value] of [['baseline', baseline], ['feature', feature]]) {
+                if (unsafeRef(value)) {
+                  core.setFailed(`${name} must be a branch or tag in ${context.repo.owner}/${context.repo.repo}; pull refs and raw SHAs are not allowed on self-hosted runners`);
+                  return;
+                }
+              }
 
               // Find PR for the selected branch
               const branch = '${{ github.ref_name }}';
@@ -512,6 +528,11 @@ jobs:
                 repo: context.repo.repo,
                 pull_number: parseInt(pr),
               });
+              const trustedRepository = `${context.repo.owner}/${context.repo.repo}`;
+              if (prData.head.repo.full_name !== trustedRepository) {
+                core.setFailed(`Refusing to run fork PR code from ${prData.head.repo.full_name} on a self-hosted runner`);
+                return;
+              }
               core.setOutput('pr-head-sha', prData.head.sha);
               core.setOutput('pr-head-ref', prData.head.ref);
               core.setOutput('pr-head-repo', prData.head.repo.full_name);
@@ -728,7 +749,9 @@ jobs:
 
   bench-txgen:
     needs: bench-ack
-    if: needs.bench-ack.outputs.command == 'bench'
+    if: >-
+      needs.bench-ack.outputs.command == 'bench' &&
+      (needs.bench-ack.outputs.pr == '' || needs.bench-ack.outputs.pr-head-repo == github.repository)
     name: bench-txgen
     runs-on: [self-hosted, Linux, X64, available]
     permissions:

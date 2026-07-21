@@ -26,7 +26,7 @@ on:
       download_ref:
         description: "Reth git ref used only for snapshot download"
         required: false
-        default: "pull/24027/head"
+        default: "main"
         type: string
       suite:
         description: "benchmarkoor-replay suite"
@@ -149,7 +149,53 @@ name: bench-benchmarkoor
 permissions: {}
 
 jobs:
+  authorize:
+    name: authorize self-hosted benchmark refs
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Reject fork and hidden pull refs
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          INPUT_PR: ${{ inputs.pr || '' }}
+          INPUT_FEATURE: ${{ inputs.feature || '' }}
+          INPUT_BASELINE: ${{ inputs.baseline || 'main' }}
+          INPUT_DOWNLOAD: ${{ inputs.download_ref || 'main' }}
+        with:
+          script: |
+            const trustedRepository = `${context.repo.owner}/${context.repo.repo}`;
+            const pullNumber = process.env.INPUT_PR;
+            if (pullNumber) {
+              const { data: pr } = await github.rest.pulls.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: Number(pullNumber),
+              });
+              if (pr.head.repo.full_name !== trustedRepository) {
+                core.setFailed(`Refusing to run fork PR code from ${pr.head.repo.full_name} on a self-hosted runner`);
+                return;
+              }
+            }
+
+            const unsafeRef = (ref) => {
+              const value = String(ref || '');
+              return /^(refs\/)?pull\//.test(value) || /^[0-9a-f]{40}$/i.test(value);
+            };
+            for (const [name, value] of [
+              ['feature', process.env.INPUT_FEATURE],
+              ['baseline', process.env.INPUT_BASELINE],
+              ['download_ref', process.env.INPUT_DOWNLOAD],
+            ]) {
+              if (unsafeRef(value)) {
+                core.setFailed(`${name} must be a branch or tag in ${trustedRepository}; pull refs and raw SHAs are not allowed on self-hosted runners`);
+                return;
+              }
+            }
+
   benchmarkoor:
+    needs: authorize
     name: bench-benchmarkoor
     runs-on: [self-hosted, Linux, X64, available]
     permissions:
@@ -330,18 +376,13 @@ jobs:
           INPUT_PR: ${{ inputs.pr || '' }}
           INPUT_FEATURE: ${{ inputs.feature || '' }}
           INPUT_BASELINE: ${{ inputs.baseline || 'main' }}
-          INPUT_DOWNLOAD: ${{ inputs.download_ref || 'pull/24027/head' }}
+          INPUT_DOWNLOAD: ${{ inputs.download_ref || 'main' }}
         run: |
           set -euo pipefail
           git fetch origin main --quiet
 
           resolve_ref() {
             local ref="$1"
-            if [[ "$ref" =~ ^pull/[0-9]+/(head|merge)$ ]]; then
-              git fetch origin "$ref" --quiet
-              git rev-parse --verify "FETCH_HEAD^{commit}"
-              return 0
-            fi
             git fetch origin "$ref" --quiet 2>/dev/null || true
             if git rev-parse --verify --quiet "${ref}^{commit}" >/dev/null; then
               git rev-parse --verify "${ref}^{commit}"
@@ -364,7 +405,7 @@ jobs:
 
           BASELINE_NAME="${INPUT_BASELINE:-main}"
           BASELINE_REF="$(resolve_ref "$BASELINE_NAME")"
-          DOWNLOAD_NAME="${INPUT_DOWNLOAD:-pull/24027/head}"
+          DOWNLOAD_NAME="${INPUT_DOWNLOAD:-main}"
           DOWNLOAD_REF="$(resolve_ref "$DOWNLOAD_NAME")"
 
           {
